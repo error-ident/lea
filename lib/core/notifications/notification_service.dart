@@ -165,7 +165,7 @@ class NotificationService {
       // на крайний случай — не падаем, останется UTC
     }
 
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher_cream');
     const ios = DarwinInitializationSettings();
     await _plugin.initialize(
       const InitializationSettings(android: android, iOS: ios),
