@@ -1,0 +1,19 @@
+<svg width="440" height="900" viewBox="0 0 440 900" xmlns="http://www.w3.org/2000/svg">
+  <defs><radialGradient id="bg_dark" cx="50%" cy="34%" r="75%">
+    <stop offset="0%" stop-color="#2D2623"/><stop offset="100%" stop-color="#221C1A"/></radialGradient></defs>
+  <rect width="440" height="900" fill="url(#bg_dark)"/>
+  <g transform="translate(220 360) scale(0.92)">
+    <g opacity="0.92">
+      <ellipse cx="0" cy="-82" rx="44" ry="82" fill="#EE9E88" transform="rotate(0)"/>
+      <ellipse cx="0" cy="-82" rx="44" ry="82" fill="#EDCB9C" transform="rotate(72)"/>
+      <ellipse cx="0" cy="-82" rx="44" ry="82" fill="#AFD3A2" transform="rotate(144)"/>
+      <ellipse cx="0" cy="-82" rx="44" ry="82" fill="#CBB4E4" transform="rotate(216)"/>
+      <ellipse cx="0" cy="-82" rx="44" ry="82" fill="#EFB0C2" transform="rotate(288)"/>
+    </g>
+    <circle cx="0" cy="0" r="30" fill="#2D2623"/>
+    <circle cx="0" cy="0" r="15" fill="#EDCB9C"/>
+  </g>
+  <text x="220" y="540" font-family="Nunito,sans-serif" font-size="46" font-weight="900" fill="#F2E9E3" text-anchor="middle" letter-spacing="-1">Лея</text>
+  <text x="220" y="572" font-family="Nunito,sans-serif" font-size="16" font-weight="500" fill="#A8978D" text-anchor="middle">Спокойный дневник цикла</text>
+  <circle cx="204" cy="820" r="7" fill="#EE9E88"/><circle cx="220" cy="820" r="7" fill="#AFD3A2"/><circle cx="236" cy="820" r="7" fill="#CBB4E4"/>
+</svg>
