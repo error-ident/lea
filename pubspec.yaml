@@ -1,7 +1,7 @@
 name: lea
 description: Лея — приватный трекер менструального цикла. Без рекламы, без слежки, офлайн.
 publish_to: none
-version: 1.0.0+2
+version: 1.0.1+3
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -46,6 +46,11 @@ dependencies:
   # уведомления
   flutter_local_notifications: ^17.2.1
   timezone: ^0.9.4
+  # helpers для надёжной доставки уведомлений на EMUI/MIUI:
+  # открыть системные экраны (батарея, точные будильники, автозапуск)
+  android_intent_plus: ^5.1.0
+  # определить вендора (Huawei/Xiaomi/...) для точечной подсказки
+  device_info_plus: ^10.1.0
   lottie: ^3.4.0
   flutter_native_splash: ^2.4.8
   flutter_dynamic_icon_plus: ^1.4.1

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lea_design/lea_design.dart';
 
 import '../../core/notifications/notification_service.dart';
+import '../../core/notifications/device_reminder_help.dart';
 import '../../core/providers/providers.dart';
 
 class NotificationsScreen extends ConsumerWidget {
@@ -39,12 +40,19 @@ class _Body extends ConsumerStatefulWidget {
 class _BodyState extends ConsumerState<_Body> {
   late NotificationSettings s;
   bool _permissionGranted = true;
+  bool _aggressiveVendor = false;
 
   @override
   void initState() {
     super.initState();
     s = widget.settings;
     _checkPermission();
+    _checkVendor();
+  }
+
+  Future<void> _checkVendor() async {
+    final aggressive = await DeviceReminderHelp.isAggressiveVendor();
+    if (mounted) setState(() => _aggressiveVendor = aggressive);
   }
 
   Future<void> _checkPermission() async {
@@ -53,10 +61,10 @@ class _BodyState extends ConsumerState<_Body> {
   }
 
   Future<void> _requestPermission() async {
-    await NotificationService().requestPermissions();
-    await _checkPermission();
+    final granted = await NotificationService().requestPermissions();
+    if (mounted) setState(() => _permissionGranted = granted);
     // после выдачи разрешения перепланируем текущие настройки
-    if (_permissionGranted) {
+    if (granted) {
       final pred = await ref.read(predictionProvider.future);
       await NotificationService().reschedule(pred, s);
     }
@@ -78,6 +86,9 @@ class _BodyState extends ConsumerState<_Body> {
       children: [
         // баннер-подсказка если уведомления не разрешены
         if (!_permissionGranted) _PermissionBanner(onTap: _requestPermission),
+        // подсказка для EMUI/MIUI и подобных: помочь снять ограничения ОС,
+        // иначе система убивает приложение и уведомления не приходят
+        if (_aggressiveVendor) const _DeliveryHelpCard(),
         // ---- Скоро месячные ----
         _ToggleCard(
           title: 'Скоро месячные',
@@ -584,6 +595,114 @@ class _PermissionBanner extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Подсказка для «агрессивных» прошивок (EMUI/MIUI/ColorOS…), где система
+/// убивает приложение и отменяет будильники. Даёт кнопки в нужные системные
+/// экраны. Честно предупреждает, что часть шагов — ручные.
+class _DeliveryHelpCard extends StatelessWidget {
+  const _DeliveryHelpCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    return Container(
+      margin: const EdgeInsets.only(bottom: LeaSpace.lg),
+      padding: const EdgeInsets.all(LeaSpace.lg),
+      decoration: BoxDecoration(
+        color: lea.surface,
+        borderRadius: LeaRadius.cardBR,
+        border: Border.all(color: lea.border, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.battery_alert_outlined,
+                  color: lea.accent, size: LeaIconSize.md),
+              const SizedBox(width: LeaSpace.sm),
+              Expanded(
+                child: Text('Чтобы напоминания точно приходили',
+                    style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
+              ),
+            ],
+          ),
+          const SizedBox(height: LeaSpace.sm),
+          Text(
+            'На вашем телефоне система может «усыплять» приложения и отменять '
+            'напоминания ради экономии батареи. Выполните эти шаги один раз — '
+            'и Лея сможет напоминать вовремя.',
+            style: LeaType.label.copyWith(color: lea.textSecondary),
+          ),
+          const SizedBox(height: LeaSpace.md),
+          const _HelpButton(
+            icon: Icons.battery_saver_outlined,
+            label: 'Отключить экономию батареи для Леи',
+            onTap: DeviceReminderHelp.openBatteryOptimization,
+          ),
+          const SizedBox(height: LeaSpace.sm),
+          const _HelpButton(
+            icon: Icons.alarm_outlined,
+            label: 'Разрешить точные напоминания',
+            onTap: DeviceReminderHelp.openExactAlarmSettings,
+          ),
+          const SizedBox(height: LeaSpace.sm),
+          const _HelpButton(
+            icon: Icons.settings_outlined,
+            label: 'Настройки уведомлений приложения',
+            onTap: DeviceReminderHelp.openAppNotificationSettings,
+          ),
+          const SizedBox(height: LeaSpace.md),
+          Text(
+            'Ещё найдите в настройках телефона «Автозапуск» и разрешите его '
+            'для Леи — этот шаг делается только вручную.',
+            style: LeaType.caption.copyWith(color: lea.textTertiary),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HelpButton extends StatelessWidget {
+  const _HelpButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final Future<void> Function() onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    return Material(
+      color: lea.accentSoft,
+      borderRadius: LeaRadius.buttonBR,
+      child: InkWell(
+        borderRadius: LeaRadius.buttonBR,
+        onTap: () => onTap(),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: LeaSpace.md, vertical: LeaSpace.md),
+          child: Row(
+            children: [
+              Icon(icon, color: lea.accent, size: LeaIconSize.sm),
+              const SizedBox(width: LeaSpace.sm),
+              Expanded(
+                child: Text(label,
+                    style: LeaType.label.copyWith(color: lea.textPrimary)),
+              ),
+              Icon(Icons.chevron_right, color: lea.textTertiary,
+                  size: LeaIconSize.sm),
+            ],
+          ),
+        ),
       ),
     );
   }

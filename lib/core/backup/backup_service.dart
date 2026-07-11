@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 
 import '../database/app_database.dart';
+import 'backup_date_codec.dart';
 
 /// Понятная пользователю ошибка операций с бэкапом.
 class BackupException implements Exception {
@@ -20,36 +21,84 @@ class BackupException implements Exception {
 /// и не откроется на другом телефоне), а отдельный экспорт, зашифрованный
 /// ПАРОЛЕМ ПОЛЬЗОВАТЕЛЯ. Поэтому копия переносима между устройствами.
 ///
-/// Формат файла: JSON-снимок всех таблиц → AES-256 (ключ из пароля через PBKDF-подобный
-/// хэш с солью) → base64. Соль и IV хранятся в шапке файла.
+/// Формат файла: JSON-снимок всех таблиц → AES-256 (ключ из пароля) → base64.
+/// Соль и IV хранятся в шапке файла.
+///
+/// ФОРМАТ ДАННЫХ v2: даты сериализуются как КАЛЕНДАРНЫЕ СТРОКИ 'YYYY-MM-DD',
+/// а НЕ как epoch-миллисекунды. Это критично: drift по умолчанию пишет
+/// DateTime как UTC-epoch, из-за чего при переносе между телефонами в разных
+/// часовых поясах день «съезжал» на ±1. Календарная строка не привязана к
+/// поясу — день остаётся тем же на любом устройстве.
+/// Чтение v1 (epoch) поддерживается для старых копий.
 class BackupService {
   BackupService(this.db);
   final AppDatabase db;
 
   static const _magic = 'LEA-BACKUP-1';
+  static const _dataVersion = 2;
 
   /// Собрать снимок всех данных в JSON-строку.
   Future<String> _exportJson() async {
     final periodDays = await db.select(db.periodDays).get();
-    final categories = await db.select(db.trackingCategories).get();
-    final options = await db.select(db.trackingOptions).get();
     final logs = await db.select(db.dayLogs).get();
     final notes = await db.select(db.dayNotes).get();
     final meas = await db.select(db.measurements).get();
     final settings = await db.select(db.settingsKv).get();
 
+    // Карта id опции → составной ключ 'catCode:optCode' (для flowOptionId и логов).
+    final opts = await db.select(db.trackingOptions).get();
+    final cats = await db.select(db.trackingCategories).get();
+    final catIdToCode = {for (final c in cats) c.id: c.code};
+    final optIdToKey = {
+      for (final o in opts)
+        o.id: '${catIdToCode[o.categoryId] ?? ''}:${o.code}',
+    };
+
     final data = {
-      'version': 1,
-      'exportedAt': DateTime.now().toIso8601String(),
-      'periodDays': periodDays.map((e) => e.toJson()).toList(),
-      'categories': categories.map((e) => e.toJson()).toList(),
-      'options': options.map((e) => e.toJson()).toList(),
-      'logs': logs.map((e) => e.toJson()).toList(),
-      'notes': notes.map((e) => e.toJson()).toList(),
-      'measurements': meas.map((e) => e.toJson()).toList(),
-      'settings': settings.map((e) => e.toJson()).toList(),
+      'version': _dataVersion,
+      'exportedAt': BackupDateCodec.encode(DateTime.now()),
+      // periodDays: дата-строка + flowOption по составному ключу (устойчиво
+      // к пересеву справочника) + isCycleStart.
+      'periodDays': periodDays
+          .map((e) => {
+                'date': BackupDateCodec.encode(e.date),
+                'flowOptionId': e.flowOptionId, // fallback v1
+                'flowOptionKey':
+                    e.flowOptionId == null ? null : optIdToKey[e.flowOptionId],
+                'isCycleStart': e.isCycleStart,
+              })
+          .toList(),
+      // Логи — по составному ключу catCode:optCode.
+      'logs': _logsWithKeys(logs, optIdToKey),
+      'notes': notes
+          .map((e) => {'date': BackupDateCodec.encode(e.date), 'note': e.note})
+          .toList(),
+      'measurements': meas
+          .map((e) => {
+                'date': BackupDateCodec.encode(e.date),
+                'typeCode': e.typeCode,
+                'value': e.value,
+                'unit': e.unit,
+              })
+          .toList(),
+      'settings':
+          settings.map((e) => {'key': e.key, 'value': e.value}).toList(),
     };
     return jsonEncode(data);
+  }
+
+  /// Логи с составным ключом опции (устойчиво к пересеву и неуникальным кодам,
+  /// напр. 'positive' есть и в тестах овуляции, и в настроении).
+  List<Map<String, dynamic>> _logsWithKeys(
+      List<DayLog> logs, Map<int, String> optIdToKey) {
+    return logs
+        .map((e) => {
+              'date': BackupDateCodec.encode(e.date),
+              'optionId': e.optionId, // fallback v1
+              'optionKey': optIdToKey[e.optionId], // основной ключ v2 (cat:opt)
+              'intensity': e.intensity,
+            })
+        .toList();
   }
 
   /// Создать зашифрованный паролем бэкап (возвращает байты файла).
@@ -64,7 +113,6 @@ class BackupService {
     final encrypter = enc.Encrypter(enc.AES(key, mode: enc.AESMode.cbc));
     final encrypted = encrypter.encrypt(json, iv: iv);
 
-    // Шапка (читаемый префикс) + соль + iv + шифртекст, всё base64.
     final header = {
       'magic': _magic,
       'salt': base64.encode(salt),
@@ -116,8 +164,19 @@ class BackupService {
 
   /// Записать данные из снимка в БД (полная замена пользовательских данных).
   Future<void> _importData(Map<String, dynamic> data) async {
+    // Карта составного ключа 'catCode:optCode' → id опции на ЭТОМ устройстве.
+    // Плюс запасная карта только по коду опции — для v1-бэкапов без optionKey.
+    final opts = await db.select(db.trackingOptions).get();
+    final cats = await db.select(db.trackingCategories).get();
+    final catIdToCode = {for (final c in cats) c.id: c.code};
+    final keyToId = {
+      for (final o in opts)
+        '${catIdToCode[o.categoryId] ?? ''}:${o.code}': o.id,
+    };
+    final codeToIdFallback = {for (final o in opts) o.code: o.id};
+
     await db.transaction(() async {
-      // чистим пользовательские данные (справочник пересидится при необходимости)
+      // чистим пользовательские данные (справочник НЕ трогаем — он пересеян)
       await db.delete(db.dayLogs).go();
       await db.delete(db.dayNotes).go();
       await db.delete(db.measurements).go();
@@ -125,27 +184,39 @@ class BackupService {
 
       for (final r in (data['periodDays'] as List? ?? const [])) {
         final m = r as Map<String, dynamic>;
+        // flowOption: по составному ключу (v2), иначе сырой id (v1).
+        final flowKey = m['flowOptionKey'] as String?;
+        int? flowId;
+        if (flowKey != null) {
+          flowId = keyToId[flowKey];
+        } else {
+          flowId = _toIntOrNull(m['flowOptionId']);
+        }
         await db.into(db.periodDays).insert(
               PeriodDaysCompanion.insert(
-                date: _parseDate(m['date']),
+                date: BackupDateCodec.decode(m['date']),
+                flowOptionId:
+                    flowId == null ? const Value.absent() : Value(flowId),
                 isCycleStart: Value(m['isCycleStart'] == true),
               ),
+              mode: InsertMode.insertOrIgnore,
             );
       }
       for (final r in (data['notes'] as List? ?? const [])) {
         final m = r as Map<String, dynamic>;
         await db.into(db.dayNotes).insert(
               DayNotesCompanion.insert(
-                date: _parseDate(m['date']),
+                date: BackupDateCodec.decode(m['date']),
                 note: _str(m['note']),
               ),
+              mode: InsertMode.insertOrIgnore,
             );
       }
       for (final r in (data['measurements'] as List? ?? const [])) {
         final m = r as Map<String, dynamic>;
         await db.into(db.measurements).insert(
               MeasurementsCompanion.insert(
-                date: _parseDate(m['date']),
+                date: BackupDateCodec.decode(m['date']),
                 typeCode: _str(m['typeCode']),
                 value: _toDouble(m['value']),
                 unit: _str(m['unit']),
@@ -154,10 +225,24 @@ class BackupService {
       }
       for (final r in (data['logs'] as List? ?? const [])) {
         final m = r as Map<String, dynamic>;
+        // v2: сопоставляем по составному ключу catCode:optCode (устойчиво
+        // к пересеву справочника и к неуникальным кодам опций).
+        // Промежуточный fallback — по одному коду опции (старый v2).
+        // v1 fallback — сырой optionId.
+        final key = m['optionKey'] as String?;
+        int? resolvedId;
+        if (key != null) {
+          resolvedId = keyToId[key];
+        } else if (m['optionCode'] is String) {
+          resolvedId = codeToIdFallback[m['optionCode'] as String];
+        } else {
+          resolvedId = _toIntOrNull(m['optionId']);
+        }
+        if (resolvedId == null) continue; // опции нет на устройстве — пропускаем
         await db.into(db.dayLogs).insert(
               DayLogsCompanion.insert(
-                date: _parseDate(m['date']),
-                optionId: _toInt(m['optionId']),
+                date: BackupDateCodec.decode(m['date']),
+                optionId: resolvedId,
                 intensity: Value(_toIntOrNull(m['intensity'])),
               ),
               mode: InsertMode.insertOrIgnore,
@@ -178,28 +263,8 @@ class BackupService {
   // безопасные приведения (значения из JSON бывают разных типов)
   static String _str(Object? v) => v?.toString() ?? '';
 
-  /// Разбор даты: drift сериализует DateTime как Unix-секунды/миллисекунды
-  /// (число), но возможна и ISO-строка. Понимаем оба варианта.
-  static DateTime _parseDate(Object? v) {
-    if (v is int) {
-      // эвристика: > 10^12 — миллисекунды, иначе секунды
-      return v > 100000000000
-          ? DateTime.fromMillisecondsSinceEpoch(v)
-          : DateTime.fromMillisecondsSinceEpoch(v * 1000);
-    }
-    final s = v?.toString() ?? '';
-    final asInt = int.tryParse(s);
-    if (asInt != null) {
-      return asInt > 100000000000
-          ? DateTime.fromMillisecondsSinceEpoch(asInt)
-          : DateTime.fromMillisecondsSinceEpoch(asInt * 1000);
-    }
-    return DateTime.parse(s);
-  }
   static double _toDouble(Object? v) =>
       v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
-  static int _toInt(Object? v) =>
-      v is int ? v : int.tryParse(v?.toString() ?? '') ?? 0;
   static int? _toIntOrNull(Object? v) {
     if (v == null) return null;
     if (v is int) return v;
@@ -209,8 +274,7 @@ class BackupService {
   // --- крипто-хелперы ---
 
   Uint8List _deriveKey(String password, List<int> salt) {
-    // Простой стретчинг на sha256 (несколько раундов). Для on-device бэкапа
-    // достаточно; при желании заменить на pbkdf2/argon2.
+    // Стретчинг на sha256 (10k раундов). Для on-device бэкапа достаточно.
     var bytes = utf8.encode(password) + salt;
     Digest d = sha256.convert(bytes);
     for (var i = 0; i < 10000; i++) {

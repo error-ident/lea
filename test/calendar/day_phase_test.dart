@@ -27,10 +27,14 @@ void main() {
     });
 
     test('прогнозное окно следующих месячных → forecastPeriod', () {
-      final starts = startsFrom(DateTime(2026, 1, 1), [28, 28, 28]);
+      // Даты в БУДУЩЕМ относительно реального now(), т.к. buildCycleHistory
+      // использует DateTime.now() для конца текущего цикла. Иначе прошлые
+      // тестовые даты «поглощаются» текущим циклом до сегодня.
+      final base = DateTime.now().add(const Duration(days: 400));
+      final starts = startsFrom(base, [28, 28, 28]);
       final pred = predictCycle(
         periodStartDates: starts,
-        today: DateTime(2026, 3, 20),
+        today: base.add(const Duration(days: 84)),
       );
       final r = DayPhaseResolver(
         periodDays: starts,
@@ -41,13 +45,16 @@ void main() {
     });
 
     test('день овуляции → ovulation', () {
-      final starts = startsFrom(DateTime(2026, 1, 1), [28, 28, 28]);
+      final base = DateTime.now().add(const Duration(days: 400));
+      final starts = startsFrom(base, [28, 28, 28]);
       final pred = predictCycle(
         periodStartDates: starts,
-        today: DateTime(2026, 3, 20),
+        today: base.add(const Duration(days: 84)),
       );
       final r = DayPhaseResolver(periodDays: starts, prediction: pred);
-      final ovDay = pred.nextPeriodStart.subtract(const Duration(days: 14));
+      // лютеиновая для цикла 28 = 14; овуляция = nextStart − 14
+      final ovDay = pred.nextPeriodStart
+          .subtract(Duration(days: lutealForCycle(pred.medianCycleLength)));
       expect(r.phaseFor(ovDay), DayPhase.ovulation);
     });
   });

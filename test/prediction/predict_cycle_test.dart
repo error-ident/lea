@@ -81,10 +81,11 @@ void main() {
     });
 
     test('один выброс не ломает медиану', () {
-      // Четыре по 28 и один аномальный 60 — медиана должна остаться около 28.
+      // Четыре по 28 и один аномальный 60. Слой 0 распознаёт 60 как
+      // склейку (≈2×28 из пропущенной отметки) и разбирает её,
+      // поэтому медиана остаётся около 28 (не раздувается выбросом).
       final starts = startsFrom(DateTime(2026, 1, 1), [28, 28, 60, 28, 28]);
       final p = predictCycle(periodStartDates: starts, today: DateTime(2026, 7, 1));
-      // Медиана последних 5 длин [28,28,60,28,28] = 28.
       expect(p.medianCycleLength, 28);
     });
   });
@@ -105,6 +106,48 @@ void main() {
       final p = predictCycle(periodStartDates: starts, today: DateTime(2027, 1, 1));
       // Последние 6 длин — все 33 → медиана 33.
       expect(p.medianCycleLength, 33);
+    });
+  });
+
+  group('Слой 0 — фильтр склеек (пропущенных отметок)', () {
+    test('склейка ~2× медианы разбирается, медиана не раздувается', () {
+      // 56 = две забытые отметки по 28. Должен разложиться на 28+28.
+      final starts = startsFrom(DateTime(2026, 1, 1), [28, 28, 56, 28]);
+      final p = predictCycle(periodStartDates: starts, today: DateTime(2026, 8, 1));
+      expect(p.medianCycleLength, 28);
+    });
+
+    test('длинные РЕГУЛЯРНЫЕ циклы (40–42) НЕ считаются склейками', () {
+      // Реальная норма человека — не трогаем.
+      final starts = startsFrom(DateTime(2026, 1, 1), [40, 42, 41, 40]);
+      final p = predictCycle(periodStartDates: starts, today: DateTime(2026, 9, 1));
+      expect(p.medianCycleLength, inInclusiveRange(40, 41));
+    });
+  });
+
+  group('Реальный кейс — стабильно длинные циклы', () {
+    test('циклы 35,39,36,34,40: медиана 36, склеек нет, лютеиновая 15', () {
+      final starts = startsFrom(DateTime(2026, 1, 1), [35, 39, 36, 34, 40]);
+      final p = predictCycle(periodStartDates: starts, today: DateTime(2026, 6, 1));
+
+      expect(p.medianCycleLength, 36);
+      // Разброс маленький (MAD=2) → окно узкое, но не сверхуверенное.
+      expect(p.marginDays, lessThanOrEqualTo(3));
+      // Длинный цикл → лютеиновая фаза 15 → овуляция = nextStart − 15.
+      final expectedOv = p.nextPeriodStart.subtract(const Duration(days: 15));
+      expect(p.ovulationWindow.contains(expectedOv), true);
+    });
+  });
+
+  group('Слой 3-preview — динамическая лютеиновая фаза', () {
+    test('короткий цикл → лютеиновая 13', () {
+      expect(lutealForCycle(23), 13);
+    });
+    test('средний цикл → лютеиновая 14', () {
+      expect(lutealForCycle(28), 14);
+    });
+    test('длинный цикл → лютеиновая 15', () {
+      expect(lutealForCycle(36), 15);
     });
   });
 }

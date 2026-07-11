@@ -1,5 +1,6 @@
 import '../../core/prediction/cycle_prediction.dart';
 import '../../core/prediction/cycle_history.dart';
+import '../../core/prediction/predict_cycle.dart';
 
 /// Фаза/статус дня для раскраски ячейки календаря.
 enum DayPhase {
@@ -20,7 +21,7 @@ enum DayPhase {
 /// Научная основа (Cleveland Clinic, UCSF, NCBI):
 /// - день 1 цикла = первый день менструации;
 /// - менструация: дни 1..periodLength;
-/// - овуляция: за ~14 дней до конца цикла (лютеиновая фаза ≈ постоянна, 14 дн.);
+/// - овуляция: за 13–15 дней до конца цикла (лютеиновая фаза, по длине цикла);
 /// - фолликулярная: от конца менструации до овуляции;
 /// - лютеиновая: от овуляции до конца цикла.
 class DayPhaseResolver {
@@ -37,8 +38,9 @@ class DayPhaseResolver {
   final Set<DateTime> _periodSet;
   final List<CycleRecord> _cycles;
 
-  /// Лютеиновая фаза ≈ постоянна (14 дней). Овуляция — за 14 дней до конца цикла.
-  static const _lutealLength = 14;
+  // Лютеиновая фаза считается динамически по длине цикла через
+  // lutealForCycle(...) — единая функция с движком прогноза, чтобы
+  // календарь и предсказание не рассинхронились.
 
   DayPhase phaseFor(DateTime date) {
     final day = DateTime(date.year, date.month, date.day);
@@ -75,9 +77,10 @@ class DayPhaseResolver {
     // длина цикла: известная, либо медиана прогноза для текущего
     final cycleLen = c.cycleLength ?? prediction.medianCycleLength;
 
-    // день овуляции = за 14 дней до конца цикла, но не раньше,
-    // чем через день после окончания менструации (защита коротких циклов)
-    final rawOvulation = cycleLen - _lutealLength;
+    // день овуляции = за (лютеиновая фаза) дней до конца цикла, но не раньше,
+    // чем через день после окончания менструации (защита коротких циклов).
+    // Лютеиновая фаза динамическая по длине ЭТОГО цикла.
+    final rawOvulation = cycleLen - lutealForCycle(cycleLen);
     final ovulationDay =
         rawOvulation > c.periodLength ? rawOvulation : c.periodLength + 1;
 

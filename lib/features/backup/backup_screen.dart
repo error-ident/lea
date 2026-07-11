@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/backup/backup_service.dart';
 import '../../core/backup/yandex_disk_client.dart';
 import '../../core/backup/yandex_auth.dart';
+import '../../core/notifications/notification_service.dart';
 import '../../core/providers/providers.dart';
 
 /// Экран резервной копии. Экспорт — зашифрованный паролем файл, который
@@ -16,6 +17,37 @@ import '../../core/providers/providers.dart';
 /// Сервер разработчика НЕ участвует — приватность сохраняется.
 class BackupScreen extends ConsumerWidget {
   const BackupScreen({super.key});
+
+  /// Полная инвалидация кэша после восстановления данных.
+  /// Критично: включает onboardingDoneProvider — иначе после восстановления
+  /// на новом телефоне снова показывался онбординг, хотя флаг уже в БД.
+  /// Также обновляет прогноз, историю, настройки, замеры и заметки.
+  static void _invalidateAfterRestore(WidgetRef ref) {
+    ref.invalidate(onboardingDoneProvider);
+    ref.invalidate(statedCycleProvider);
+    ref.invalidate(cycleStartsProvider);
+    ref.invalidate(periodDaysStreamProvider);
+    ref.invalidate(predictionProvider);
+    ref.invalidate(cycleHistoryProvider);
+    ref.invalidate(datesWithEntriesProvider);
+    ref.invalidate(visibleCategoriesProvider);
+    ref.invalidate(notificationSettingsProvider);
+    ref.invalidate(themeIdProvider);
+    ref.invalidate(darkModeProvider);
+  }
+
+  /// Перепланировать уведомления о цикле по восстановленному прогнозу.
+  /// Без этого после restore напоминания оставались привязаны к старым/пустым
+  /// данным и не срабатывали, пока пользователь вручную не зайдёт в настройки.
+  static Future<void> _rescheduleAfterRestore(WidgetRef ref) async {
+    try {
+      final pred = await ref.read(predictionProvider.future);
+      final settings = await ref.read(notificationSettingsProvider.future);
+      await NotificationService().reschedule(pred, settings);
+    } catch (_) {
+      // не критично для восстановления данных — молча пропускаем
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -220,12 +252,15 @@ class BackupScreen extends ConsumerWidget {
         Uint8List.fromList(bytes),
         password,
       );
-      ref.invalidate(cycleStartsProvider);
-      ref.invalidate(periodDaysStreamProvider);
+      _invalidateAfterRestore(ref);
+      await _rescheduleAfterRestore(ref);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Данные восстановлены')),
         );
+        // Если экран открыт поверх онбординга — возвращаемся к корню,
+        // чтобы приложение перерисовалось уже как «онбординг пройден».
+        Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (e) {
       if (context.mounted) _showError(context, e);
@@ -282,12 +317,13 @@ class BackupScreen extends ConsumerWidget {
 
       final db = ref.read(databaseProvider);
       await BackupService(db).restoreEncryptedBackup(bytes, password);
-      ref.invalidate(cycleStartsProvider);
-      ref.invalidate(periodDaysStreamProvider);
+      _invalidateAfterRestore(ref);
+      await _rescheduleAfterRestore(ref);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Восстановлено с Яндекс.Диска')),
         );
+        Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (e) {
       if (context.mounted) _showError(context, e);

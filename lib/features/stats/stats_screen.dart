@@ -4,6 +4,7 @@ import 'package:lea_design/lea_design.dart';
 
 import '../../core/providers/providers.dart';
 import '../../core/prediction/cycle_history.dart';
+import '../../core/prediction/predict_cycle.dart';
 
 class StatsScreen extends ConsumerStatefulWidget {
   const StatsScreen({super.key});
@@ -322,8 +323,10 @@ class _DotsRow extends StatelessWidget {
         (DateTime.now().difference(r.startDate).inDays + 1);
     // ограничим визуал разумным числом точек
     final n = total.clamp(1, 45);
-    // овуляция ≈ за 14 дней до конца цикла
-    final ovulationDay = r.cycleLength != null ? r.cycleLength! - 14 : -1;
+    // овуляция ≈ за (лютеиновая фаза) дней до конца цикла — динамически
+    final ovulationDay = r.cycleLength != null
+        ? r.cycleLength! - lutealForCycle(r.cycleLength!)
+        : -1;
 
     return Wrap(
       spacing: 3,

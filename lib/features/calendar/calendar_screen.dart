@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lea_design/lea_design.dart';
 
 import '../../core/prediction/cycle_prediction.dart';
+import '../../core/prediction/predict_cycle.dart';
 import '../../core/providers/providers.dart';
 import 'day_phase.dart';
 import 'widgets/month_grid.dart';
@@ -370,8 +371,6 @@ class _PredictionCardState extends State<_PredictionCard> {
       ConfidenceLevel.medium => 'ориентировочно',
       ConfidenceLevel.low => 'примерно',
     };
-    final daysToNext = p.nextPeriodStart.difference(DateTime.now()).inDays;
-    final marginText = '± ${p.marginDays} ${_dayWord(p.marginDays)}';
     final dayInCycle = _dayInCycle(p);
     final phaseLabel = _phaseLabel(p, dayInCycle);
 
@@ -400,9 +399,7 @@ class _PredictionCardState extends State<_PredictionCard> {
                           style: LeaType.h1.copyWith(color: lea.textPrimary)),
                       const SizedBox(height: LeaSpace.xs),
                       Text(
-                        daysToNext > 0
-                            ? 'через $daysToNext ${_dayWord(daysToNext)} · $marginText'
-                            : 'ожидаются со дня на день · $marginText',
+                        _countdownText(p),
                         style:
                             LeaType.label.copyWith(color: lea.textSecondary),
                       ),
@@ -472,6 +469,46 @@ class _PredictionCardState extends State<_PredictionCard> {
         ),
       );
 
+  /// Честный текст обратного отсчёта. Три состояния:
+  /// 1) будущее — «через N дней»;
+  /// 2) внутри прогнозного окна (±margin) — «со дня на день»;
+  /// 3) вышли за окно — «задержка N дней / цикл длиннее обычного».
+  /// Третье состояние убирает «враньё в прошлом»: раньше карточка
+  /// бесконечно показывала «со дня на день», даже когда цикл явно затянулся.
+  String _countdownText(CyclePrediction p) {
+    final marginText = '± ${p.marginDays} ${_dayWord(p.marginDays)}';
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
+    final start = DateTime(
+      p.nextPeriodStart.year,
+      p.nextPeriodStart.month,
+      p.nextPeriodStart.day,
+    );
+    final daysToNext = start.difference(today).inDays;
+
+    // Верхняя граница прогнозного окна (центр + margin).
+    final windowEnd = start.add(Duration(days: p.marginDays));
+    final daysPastWindow = today.difference(windowEnd).inDays;
+
+    if (daysToNext > 0) {
+      return 'через $daysToNext ${_dayWord(daysToNext)} · $marginText';
+    }
+    if (daysPastWindow <= 0) {
+      // Ещё внутри окна погрешности — нормально ждать со дня на день.
+      return 'ожидаются со дня на день · $marginText';
+    }
+    // Вышли за окно. Честно показываем задержку, не притворяясь уверенными.
+    final overdue = today.difference(start).inDays;
+    if (p.isUncertain) {
+      // При нерегулярном цикле не давим «задержкой» — цикл просто длиннее.
+      return 'цикл длиннее обычного · задержка $overdue ${_dayWord(overdue)}';
+    }
+    return 'задержка $overdue ${_dayWord(overdue)} · прогноз уточнится';
+  }
+
   int? _dayInCycle(CyclePrediction p) {
     final cycleLen = p.medianCycleLength;
     if (cycleLen <= 0) return null;
@@ -483,7 +520,7 @@ class _PredictionCardState extends State<_PredictionCard> {
   String _phaseLabel(CyclePrediction p, int? dayInCycle) {
     if (dayInCycle == null) return 'фаза неизвестна';
     final cycleLen = p.medianCycleLength;
-    final ovulation = cycleLen - 14;
+    final ovulation = cycleLen - lutealForCycle(cycleLen);
     if (dayInCycle <= 5) return 'менструация';
     if ((dayInCycle - ovulation).abs() <= 1) return 'овуляция';
     if (dayInCycle < ovulation) return 'фолликулярная фаза';

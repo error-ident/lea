@@ -264,6 +264,38 @@ class NotificationService {
   }
 
   /// Разовое уведомление в конкретную дату/время.
+  /// Можно ли планировать ТОЧНЫЕ будильники (Android 12+ может запретить).
+  /// Кэшируется, чтобы не дёргать платформу на каждое уведомление.
+  bool? _exactAllowed;
+
+  Future<bool> canScheduleExact() async {
+    if (_exactAllowed != null) return _exactAllowed!;
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android == null) {
+      _exactAllowed = true; // iOS/др. — точность не ограничивается так
+      return true;
+    }
+    try {
+      _exactAllowed = await android.canScheduleExactNotifications() ?? true;
+    } catch (_) {
+      _exactAllowed = false;
+    }
+    return _exactAllowed!;
+  }
+
+  /// Сбросить кэш (после того как пользователь мог выдать разрешение).
+  void invalidateExactCache() => _exactAllowed = null;
+
+  /// Режим планирования: точный, если разрешён; иначе неточный (лучше
+  /// приблизительное уведомление, чем отсутствие уведомления на EMUI/MIUI).
+  Future<AndroidScheduleMode> _resolveScheduleMode() async {
+    final exact = await canScheduleExact();
+    return exact
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
+  }
+
   Future<void> _scheduleOnce({
     required int id,
     required DateTime date,
@@ -280,7 +312,7 @@ class NotificationService {
       body,
       when,
       _details(),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: await _resolveScheduleMode(),
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
     );
@@ -305,7 +337,7 @@ class NotificationService {
       body,
       when,
       _details(),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: await _resolveScheduleMode(),
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: DateTimeComponents.time, // повтор каждый день

@@ -159,6 +159,10 @@ class _CategoryBlock extends ConsumerWidget {
                             }
                             await db.toggleLog(date, opt.id);
                             ref.invalidate(selectedOptionsProvider(date));
+                            // Обновляем индикаторы отмеченных дней на календаре
+                            // (точки под датами) — иначе появлялись только после
+                            // перезапуска приложения.
+                            ref.invalidate(datesWithEntriesProvider);
                             // periodDaysStreamProvider НЕ трогаем — симптомы
                             // не влияют на дни цикла, а его инвалидация
                             // перерисовывает календарь под шторкой (мигание).
@@ -322,6 +326,7 @@ class _NumericInputState extends ConsumerState<_NumericInput> {
     final db = ref.read(databaseProvider);
     await db.setMeasurement(widget.date, widget.category.code, value, _unit);
     ref.invalidate(measurementsProvider(widget.date));
+    ref.invalidate(datesWithEntriesProvider);
   }
 
   @override
@@ -387,6 +392,7 @@ class _NoteFieldState extends ConsumerState<_NoteField> {
     final db = ref.read(databaseProvider);
     await db.setNote(widget.date, _ctrl.text.trim());
     ref.invalidate(noteProvider(widget.date));
+    ref.invalidate(datesWithEntriesProvider);
   }
 
   @override
