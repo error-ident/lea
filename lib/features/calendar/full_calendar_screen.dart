@@ -56,10 +56,14 @@ class _FullCalendarScreenState extends ConsumerState<FullCalendarScreen> {
   @override
   Widget build(BuildContext context) {
     final lea = context.lea;
-    final entryDates = ref.watch(datesWithEntriesProvider).maybeWhen(
-          data: (s) => s,
-          orElse: () => <DateTime>{},
-        );
+    // valueOrNull сохраняет прошлое значение во время перезагрузки — иначе
+    // календарь мигает (см. calendar_screen).
+    final entryDates =
+        ref.watch(datesWithEntriesProvider).valueOrNull ?? <DateTime>{};
+    final flowMap =
+        ref.watch(flowByDateProvider).valueOrNull ?? <DateTime, String>{};
+    final showCycleDay =
+        ref.watch(showCycleDayProvider).valueOrNull ?? false;
     final today = DateTime.now();
 
     // НЕ используем .when с loading — иначе при обновлении ListView заменяется
@@ -163,6 +167,8 @@ class _FullCalendarScreenState extends ConsumerState<FullCalendarScreen> {
                             today: today,
                             selected: _rangeMode ? _rangeStart : null,
                             loggedDays: entryDates,
+                            flowByDate: flowMap,
+                            showCycleDay: showCycleDay,
                             onSelect: (d) => _onSelect(d),
                           ),
                         );

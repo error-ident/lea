@@ -65,6 +65,10 @@ class NotificationSettings {
     this.minute = 0,
     this.periodText = 'Скоро месячные',
     this.ovulationText = 'Приближается овуляция',
+    this.follicularEnabled = false,
+    this.lutealEnabled = false,
+    this.follicularText = 'Началась фолликулярная фаза',
+    this.lutealText = 'Началась лютеиновая фаза',
     this.pills = const [],
     this.waters = const [],
   });
@@ -80,6 +84,16 @@ class NotificationSettings {
   final String periodText;
   final String ovulationText;
 
+  /// Уведомления о наступлении фаз. По умолчанию ВЫКЛЮЧЕНЫ — пользователь
+  /// включает сам. Текст нейтральный: сообщаем ФАКТ наступления фазы, а не
+  /// то, что человек «почувствует» (см. PhaseInfo — почему это важно).
+  /// Менструация и овуляция не дублируются: для них есть отдельные
+  /// напоминания выше.
+  final bool follicularEnabled;
+  final bool lutealEnabled;
+  final String follicularText;
+  final String lutealText;
+
   /// Списки таблеток и воды (каждое — своё время и текст).
   final List<TimedReminder> pills;
   final List<TimedReminder> waters;
@@ -93,6 +107,10 @@ class NotificationSettings {
     int? minute,
     String? periodText,
     String? ovulationText,
+    bool? follicularEnabled,
+    bool? lutealEnabled,
+    String? follicularText,
+    String? lutealText,
     List<TimedReminder>? pills,
     List<TimedReminder>? waters,
   }) =>
@@ -105,6 +123,10 @@ class NotificationSettings {
         minute: minute ?? this.minute,
         periodText: periodText ?? this.periodText,
         ovulationText: ovulationText ?? this.ovulationText,
+        follicularEnabled: follicularEnabled ?? this.follicularEnabled,
+        lutealEnabled: lutealEnabled ?? this.lutealEnabled,
+        follicularText: follicularText ?? this.follicularText,
+        lutealText: lutealText ?? this.lutealText,
         pills: pills ?? this.pills,
         waters: waters ?? this.waters,
       );
@@ -118,6 +140,10 @@ class NotificationSettings {
         'minute': minute,
         'periodText': periodText,
         'ovulationText': ovulationText,
+        'follicular': follicularEnabled,
+        'luteal': lutealEnabled,
+        'follicularText': follicularText,
+        'lutealText': lutealText,
         'pills': pills.map((e) => e.toJson()).toList(),
         'waters': waters.map((e) => e.toJson()).toList(),
       };
@@ -133,6 +159,12 @@ class NotificationSettings {
         periodText: j['periodText'] as String? ?? 'Скоро месячные',
         ovulationText:
             j['ovulationText'] as String? ?? 'Приближается овуляция',
+        follicularEnabled: j['follicular'] as bool? ?? false,
+        lutealEnabled: j['luteal'] as bool? ?? false,
+        follicularText: j['follicularText'] as String? ??
+            'Началась фолликулярная фаза',
+        lutealText:
+            j['lutealText'] as String? ?? 'Началась лютеиновая фаза',
         pills: (j['pills'] as List? ?? const [])
             .map((e) => TimedReminder.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -147,6 +179,10 @@ class NotificationSettings {
 }
 
 class NotificationService {
+  /// Средняя длительность менструации (Mihm et al. 2011 — около 5 дней).
+  /// Используется только для уведомления о начале фолликулярной фазы.
+  static const int _avgMenstruationDays = 5;
+
   NotificationService([FlutterLocalNotificationsPlugin? plugin])
       : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
@@ -237,6 +273,36 @@ class NotificationService {
         hour: s.hour,
         minute: s.minute,
         body: s.ovulationText,
+      );
+    }
+
+    // --- Уведомления о наступлении фаз (по умолчанию выключены) ---
+    // Сообщаем ФАКТ наступления фазы, без обещаний самочувствия.
+    // Менструация/овуляция не дублируются — для них напоминания выше.
+    if (s.follicularEnabled) {
+      // Фолликулярная фаза «ощутимо» начинается после менструации.
+      // Длина менструации в прогнозе не хранится, берём среднюю (~5 дней,
+      // Mihm et al. 2011) — для уведомления-факта этого достаточно.
+      final when = prediction.nextPeriodStart
+          .add(const Duration(days: _avgMenstruationDays));
+      await _scheduleOnce(
+        id: 10,
+        date: when,
+        hour: s.hour,
+        minute: s.minute,
+        body: s.follicularText,
+      );
+    }
+    if (s.lutealEnabled) {
+      // Лютеиновая начинается сразу после овуляции.
+      final when =
+          prediction.ovulationWindow.end.add(const Duration(days: 1));
+      await _scheduleOnce(
+        id: 11,
+        date: when,
+        hour: s.hour,
+        minute: s.minute,
+        body: s.lutealText,
       );
     }
     // таблетки — ежедневно в заданное время

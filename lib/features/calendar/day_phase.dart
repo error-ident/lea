@@ -68,6 +68,20 @@ class DayPhaseResolver {
     return null;
   }
 
+  /// Номер дня внутри цикла (1-й, 2-й, …) для отображения на клетке.
+  ///
+  /// Возвращает null для дней вне известных циклов (будущее за прогнозом,
+  /// прошлое до первой отметки) — там номер был бы выдуманным, а врать
+  /// пользователю нельзя.
+  int? cycleDayFor(DateTime date) {
+    final day = DateTime(date.year, date.month, date.day);
+    final c = _cycleFor(day);
+    if (c == null) return null;
+    final start =
+        DateTime(c.startDate.year, c.startDate.month, c.startDate.day);
+    return day.difference(start).inDays + 1;
+  }
+
   /// Фаза дня ВНУТРИ конкретного цикла — правильный порядок.
   DayPhase _phaseInCycle(DateTime day, CycleRecord c) {
     final start =

@@ -126,6 +126,34 @@ class _BodyState extends ConsumerState<_Body> {
           ],
         ),
         const SizedBox(height: LeaSpace.lg),
+        // ---- Уведомления о фазах (по умолчанию выключены) ----
+        // Сообщают факт наступления фазы. Описание того, что происходит
+        // в фазе, живёт в календаре (тап по фазе) — здесь только факт.
+        _ToggleCard(
+          title: 'Начало фолликулярной фазы',
+          enabled: s.follicularEnabled,
+          onToggle: (v) => _save(s.copyWith(follicularEnabled: v)),
+          children: [
+            _TextField(
+              label: 'Текст напоминания',
+              value: s.follicularText,
+              onChanged: (v) => _save(s.copyWith(follicularText: v)),
+            ),
+          ],
+        ),
+        _ToggleCard(
+          title: 'Начало лютеиновой фазы',
+          enabled: s.lutealEnabled,
+          onToggle: (v) => _save(s.copyWith(lutealEnabled: v)),
+          children: [
+            _TextField(
+              label: 'Текст напоминания',
+              value: s.lutealText,
+              onChanged: (v) => _save(s.copyWith(lutealText: v)),
+            ),
+          ],
+        ),
+        const SizedBox(height: LeaSpace.lg),
         // ---- Время для прогнозных напоминаний ----
         _TimeCard(
           title: 'Время уведомлений',

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lea_design/lea_design.dart';
 
 import '../../core/providers/providers.dart';
+import '../../core/database/settings_keys.dart';
 import '../../core/security/lock_service.dart';
 import '../../core/icon/app_icon_service.dart';
 import '../splash/lea_mark.dart';
@@ -43,7 +44,7 @@ class SettingsScreen extends ConsumerWidget {
                   label: Text(_name(id)),
                   selected: themeId == id,
                   onSelected: (_) =>
-                      ref.read(themeIdProvider.notifier).state = id,
+                      ref.read(themeIdProvider.notifier).set(id),
                 ),
             ],
           ),
@@ -53,7 +54,24 @@ class SettingsScreen extends ConsumerWidget {
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
             value: dark,
             activeThumbColor: lea.accent,
-            onChanged: (v) => ref.read(darkModeProvider.notifier).state = v,
+            onChanged: (v) => ref.read(darkModeProvider.notifier).set(v),
+          ),
+          // Номера дней цикла на календаре — по умолчанию ВЫКЛЮЧЕНО.
+          // Не всем нужно, а без номеров календарь читается чище.
+          SwitchListTile(
+            title: Text('Номер дня цикла на календаре',
+                style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
+            subtitle: Text(
+              'показывать мелким шрифтом под датой',
+              style: LeaType.caption.copyWith(color: lea.textSecondary),
+            ),
+            value: ref.watch(showCycleDayProvider).valueOrNull ?? false,
+            activeThumbColor: lea.accent,
+            onChanged: (v) async {
+              final db = ref.read(databaseProvider);
+              await db.setSetting(SettingsKeys.showCycleDay, v.toString());
+              ref.invalidate(showCycleDayProvider);
+            },
           ),
           const SizedBox(height: LeaSpace.lg),
           Text('ИКОНКА ПРИЛОЖЕНИЯ',

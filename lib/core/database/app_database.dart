@@ -169,6 +169,67 @@ class AppDatabase extends _$AppDatabase {
     await (delete(periodDays)..where((t) => t.date.equals(day))).go();
   }
 
+  // ---- Интенсивность менструации (flowOptionId у дня) ----
+
+  /// Варианты интенсивности для быстрого выбора при отметке дня.
+  ///
+  /// ВАЖНО: 'spotting' (мазня) СПЕЦИАЛЬНО исключена. Медицински это не
+  /// «очень слабые месячные», а отдельное явление: мазня может быть в
+  /// середине цикла (например, около овуляции) и не должна отмечать день
+  /// как менструацию или влиять на расчёт цикла. Она остаётся обычной
+  /// записью в дневнике дня.
+  Future<List<TrackingOption>> flowIntensityOptions() async {
+    final cat = await (select(trackingCategories)
+          ..where((t) => t.code.equals('flow')))
+        .getSingleOrNull();
+    if (cat == null) return [];
+    final opts = await (select(trackingOptions)
+          ..where((t) => t.categoryId.equals(cat.id))
+          ..orderBy([(t) => OrderingTerm(expression: t.sortOrder)]))
+        .get();
+    return opts.where((o) => o.code != 'spotting').toList();
+  }
+
+  /// Текущая интенсивность дня (null — не задана, это нормально:
+  /// пользователь не обязан её указывать).
+  Future<int?> flowForDay(DateTime date) async {
+    final day = DateTime(date.year, date.month, date.day);
+    final row = await (select(periodDays)..where((t) => t.date.equals(day)))
+        .getSingleOrNull();
+    return row?.flowOptionId;
+  }
+
+  /// Задать/снять интенсивность дня. Повторный выбор того же варианта
+  /// снимает его (null). День при этом остаётся отмеченным.
+  Future<void> setFlowForDay(DateTime date, int? optionId) async {
+    final day = DateTime(date.year, date.month, date.day);
+    await (update(periodDays)..where((t) => t.date.equals(day))).write(
+      PeriodDaysCompanion(flowOptionId: Value(optionId)),
+    );
+  }
+
+  /// Карта «день → код интенсивности» для раскраски календаря градациями.
+  /// Дни без заданной интенсивности в карту не попадают (это нормально —
+  /// интенсивность необязательна, такие дни красятся базовым цветом).
+  Future<Map<DateTime, String>> flowByDate() async {
+    final q = select(periodDays).join([
+      leftOuterJoin(
+        trackingOptions,
+        trackingOptions.id.equalsExp(periodDays.flowOptionId),
+      ),
+    ]);
+    final rows = await q.get();
+    final out = <DateTime, String>{};
+    for (final r in rows) {
+      final pd = r.readTable(periodDays);
+      final opt = r.readTableOrNull(trackingOptions);
+      if (opt == null) continue;
+      final d = DateTime(pd.date.year, pd.date.month, pd.date.day);
+      out[d] = opt.code;
+    }
+    return out;
+  }
+
   // ---- Справочники ----
 
   /// Видимые категории (не скрытые), по порядку.

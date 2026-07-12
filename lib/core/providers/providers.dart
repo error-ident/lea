@@ -72,10 +72,56 @@ final visibleCategoriesProvider = FutureProvider((ref) async {
 });
 
 /// Текущая тема. Дефолт — «Тёплый крем».
-final themeIdProvider = StateProvider<LeaThemeId>((ref) => LeaThemeId.cream);
+/// СОХРАНЯЕТСЯ в БД: раньше была StateProvider и сбрасывалась при каждом
+/// перезапуске приложения (ключ в SettingsKeys был, но не использовался).
+class ThemeIdNotifier extends Notifier<LeaThemeId> {
+  @override
+  LeaThemeId build() {
+    _load();
+    return LeaThemeId.cream;
+  }
 
-/// Тёмная тема вкл/выкл.
-final darkModeProvider = StateProvider<bool>((ref) => false);
+  Future<void> _load() async {
+    final db = ref.read(databaseProvider);
+    final raw = await db.getSetting(SettingsKeys.themeId);
+    if (raw == null) return;
+    final found = LeaThemeId.values.where((e) => e.name == raw);
+    if (found.isNotEmpty) state = found.first;
+  }
+
+  Future<void> set(LeaThemeId id) async {
+    state = id;
+    final db = ref.read(databaseProvider);
+    await db.setSetting(SettingsKeys.themeId, id.name);
+  }
+}
+
+final themeIdProvider =
+    NotifierProvider<ThemeIdNotifier, LeaThemeId>(ThemeIdNotifier.new);
+
+/// Тёмная тема вкл/выкл. Тоже СОХРАНЯЕТСЯ в БД.
+class DarkModeNotifier extends Notifier<bool> {
+  @override
+  bool build() {
+    _load();
+    return false;
+  }
+
+  Future<void> _load() async {
+    final db = ref.read(databaseProvider);
+    final raw = await db.getSetting(SettingsKeys.darkMode);
+    if (raw != null) state = raw == 'true';
+  }
+
+  Future<void> set(bool v) async {
+    state = v;
+    final db = ref.read(databaseProvider);
+    await db.setSetting(SettingsKeys.darkMode, v.toString());
+  }
+}
+
+final darkModeProvider =
+    NotifierProvider<DarkModeNotifier, bool>(DarkModeNotifier.new);
 
 /// Все опции категорий разом (для экрана ввода).
 final allOptionsProvider = FutureProvider((ref) async {
@@ -111,6 +157,24 @@ final datesWithEntriesProvider = FutureProvider<Set<DateTime>>((ref) async {
   final db = ref.watch(databaseProvider);
   ref.watch(periodDaysStreamProvider); // обновлять при изменениях
   return db.datesWithEntries();
+});
+
+/// Интенсивность менструации по дням (день → код: light/medium/heavy/clots).
+/// ОТДЕЛЬНЫЙ провайдер, НЕ завязан на periodDaysStreamProvider: изменение
+/// интенсивности не меняет состав дней цикла, и инвалидация потока дней
+/// приводила бы к перерисовке (миганию) календаря под шторкой.
+final flowByDateProvider = FutureProvider<Map<DateTime, String>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  return db.flowByDate();
+});
+
+/// Показывать ли номер дня цикла на клетках календаря.
+/// По умолчанию ВЫКЛЮЧЕНО: не всем нужно, а без номеров календарь читается
+/// чище. Настройка сохраняется в БД (переживает перезапуск).
+final showCycleDayProvider = FutureProvider<bool>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final v = await db.getSetting(SettingsKeys.showCycleDay);
+  return v == 'true';
 });
 
 /// Настройки уведомлений (из settings, JSON).

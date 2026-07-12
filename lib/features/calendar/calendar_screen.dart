@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lea_design/lea_design.dart';
 
+import '../../core/database/app_database.dart';
 import '../../core/prediction/cycle_prediction.dart';
 import '../../core/prediction/predict_cycle.dart';
 import '../../core/providers/providers.dart';
+import '../../l10n/strings.dart';
 import 'day_phase.dart';
+import 'phase_info.dart';
 import 'widgets/month_grid.dart';
 import 'widgets/cycle_ring_painted.dart';
 import 'full_calendar_screen.dart';
@@ -21,12 +24,29 @@ class CalendarScreen extends ConsumerStatefulWidget {
 class _CalendarScreenState extends ConsumerState<CalendarScreen> {
   DateTime? _selected;
 
+  /// Последний успешный прогноз. Нужен, чтобы календарь НЕ исчезал во время
+  /// пересчёта.
+  ///
+  /// КОРЕНЬ МИГАНИЯ: setFlowForDay делает UPDATE таблицы periodDays. Drift
+  /// пушит это в живой поток periodDaysStreamProvider → пересчитывается
+  /// cycleStartsProvider → predictionProvider уходит в loading →
+  /// prediction.when(loading:) возвращал пустой SizedBox → весь календарь
+  /// исчезал на кадр. Интенсивность НЕ меняет дни цикла, поэтому показывать
+  /// прошлый прогноз во время пересчёта абсолютно корректно.
+  CyclePrediction? _lastPrediction;
+
   @override
   Widget build(BuildContext context) {
     final lea = context.lea;
     final prediction = ref.watch(predictionProvider);
     final periodDaysAsync = ref.watch(periodDaysStreamProvider);
     final today = DateTime.now();
+
+    // Держим последний успешный прогноз.
+    final predValue = prediction.valueOrNull ?? _lastPrediction;
+    if (prediction.valueOrNull != null) {
+      _lastPrediction = prediction.valueOrNull;
+    }
 
     return Scaffold(
       backgroundColor: lea.background,
@@ -44,26 +64,31 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
           ],
         ),
       ),
-      body: prediction.when(
-        // splash уже дождался прогноза; на случай микро-кадра показываем
-        // просто фон (без крутилки), чтобы не мелькал лоадер
-        loading: () => const SizedBox.expand(),
-        error: (e, _) => Center(
-          child: Text('Не удалось загрузить прогноз',
-              style: LeaType.body.copyWith(color: lea.error)),
-        ),
-        data: (pred) {
-          final periodDates = periodDaysAsync.maybeWhen(
-            data: (rows) => rows.map((r) => r.date).toList(),
-            orElse: () => <DateTime>[],
-          );
+      body: predValue == null
+          ? (prediction.hasError
+              ? Center(
+                  child: Text('Не удалось загрузить прогноз',
+                      style: LeaType.body.copyWith(color: lea.error)),
+                )
+              // splash уже дождался прогноза; на случай микро-кадра показываем
+              // просто фон (без крутилки), чтобы не мелькал лоадер
+              : const SizedBox.expand())
+          : Builder(builder: (context) {
+              final pred = predValue;
+          final periodDates =
+              (periodDaysAsync.valueOrNull ?? const []).map((r) => r.date).toList();
           final loggedSet = periodDates
               .map((d) => DateTime(d.year, d.month, d.day))
               .toSet();
-          final entryDates = ref.watch(datesWithEntriesProvider).maybeWhen(
-                data: (s) => s,
-                orElse: () => <DateTime>{},
-              );
+          // valueOrNull СОХРАНЯЕТ предыдущее значение во время перезагрузки.
+          // maybeWhen(orElse: {}) сбрасывал карту в пустую на один кадр —
+          // из-за этого календарь под шторкой мигал (терял градации/точки).
+          final entryDates =
+              ref.watch(datesWithEntriesProvider).valueOrNull ?? <DateTime>{};
+          final flowMap = ref.watch(flowByDateProvider).valueOrNull ??
+              <DateTime, String>{};
+          final showCycleDay =
+              ref.watch(showCycleDayProvider).valueOrNull ?? false;
           final resolver = DayPhaseResolver(
             periodDays: periodDates,
             prediction: pred,
@@ -101,6 +126,8 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
                     today: today,
                     selected: _selected,
                     loggedDays: entryDates,
+                    flowByDate: flowMap,
+                    showCycleDay: showCycleDay,
                     onSelect: (d) => _onSelectDay(d, loggedSet.contains(
                         DateTime(d.year, d.month, d.day))),
                   ),
@@ -111,8 +138,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
               ],
             ),
           );
-        },
-      ),
+        }),
     );
   }
 
@@ -128,14 +154,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
       shape: RoundedRectangleBorder(borderRadius: LeaRadius.sheetTopBR),
       builder: (_) => _DayActions(
         date: day,
-        isPeriod: isPeriod,
-        onTogglePeriod: () async {
-          final db = ref.read(databaseProvider);
-          await db.togglePeriodDay(day);
-          ref.invalidate(cycleStartsProvider);
-          ref.invalidate(periodDaysStreamProvider);
-          if (mounted) Navigator.of(context).pop();
-        },
+        initialIsPeriod: isPeriod,
         onMarkPeriod: () async {
           // открыть полный календарь в режиме выделения диапазона
           if (mounted) Navigator.of(context).pop();
@@ -272,19 +291,82 @@ class _AllCyclesButton extends StatelessWidget {
   }
 }
 
-class _DayActions extends StatelessWidget {
+/// Шторка действий по дню.
+///
+/// UX-принцип: отметка дня — ОДИН тап, интенсивность НЕ обязательна.
+/// Многие не заполняют интенсивность, и заставлять их нельзя. Поэтому:
+/// тап отмечает день сразу, шторка остаётся открытой и показывает
+/// ненавязчивый ряд интенсивности. Не выбрал — ничего страшного.
+class _DayActions extends ConsumerStatefulWidget {
   const _DayActions({
     required this.date,
-    required this.isPeriod,
-    required this.onTogglePeriod,
+    required this.initialIsPeriod,
     required this.onMarkPeriod,
     required this.onOpenEntry,
   });
   final DateTime date;
-  final bool isPeriod;
-  final VoidCallback onTogglePeriod;
+  final bool initialIsPeriod;
   final VoidCallback onMarkPeriod;
   final VoidCallback onOpenEntry;
+
+  @override
+  ConsumerState<_DayActions> createState() => _DayActionsState();
+}
+
+class _DayActionsState extends ConsumerState<_DayActions> {
+  late bool _isPeriod = widget.initialIsPeriod;
+  List<TrackingOption> _flowOptions = const [];
+  int? _flowId;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final db = ref.read(databaseProvider);
+    final opts = await db.flowIntensityOptions();
+    final flow = _isPeriod ? await db.flowForDay(widget.date) : null;
+    if (!mounted) return;
+    setState(() {
+      _flowOptions = opts;
+      _flowId = flow;
+      _loading = false;
+    });
+  }
+
+  Future<void> _togglePeriod() async {
+    final db = ref.read(databaseProvider);
+    await db.togglePeriodDay(widget.date);
+    ref.invalidate(cycleStartsProvider);
+    ref.invalidate(periodDaysStreamProvider);
+    ref.invalidate(predictionProvider);
+    ref.invalidate(flowByDateProvider);
+    if (!mounted) return;
+    final nowPeriod = !_isPeriod;
+    setState(() {
+      _isPeriod = nowPeriod;
+      if (!nowPeriod) _flowId = null; // сняли день — интенсивность не нужна
+    });
+    // Шторку НЕ закрываем: если день только что отмечен, пользователь
+    // может (по желанию!) сразу выбрать интенсивность.
+    if (!nowPeriod && mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _selectFlow(int optionId) async {
+    final db = ref.read(databaseProvider);
+    // Повторный тап по тому же варианту — снять выбор.
+    final next = _flowId == optionId ? null : optionId;
+    await db.setFlowForDay(widget.date, next);
+    // ВАЖНО: инвалидируем ТОЛЬКО провайдер интенсивностей.
+    // periodDaysStreamProvider трогать нельзя — он перерисовывает состав
+    // дней цикла, из-за чего календарь под шторкой мигал.
+    ref.invalidate(flowByDateProvider);
+    if (!mounted) return;
+    setState(() => _flowId = next);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -296,22 +378,44 @@ class _DayActions extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(_fmt(date),
+            Text(_fmt(widget.date),
                 style: LeaType.h2.copyWith(color: lea.textPrimary)),
             const SizedBox(height: LeaSpace.lg),
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Icon(
-                isPeriod ? Icons.close : Icons.water_drop_outlined,
+                _isPeriod ? Icons.close : Icons.water_drop_outlined,
                 color: lea.phaseMenstrual,
               ),
               title: Text(
-                isPeriod ? 'Убрать этот день' : 'Отметить этот день',
+                _isPeriod ? 'Убрать этот день' : 'Отметить этот день',
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary),
               ),
-              onTap: onTogglePeriod,
+              onTap: _togglePeriod,
             ),
-            if (!isPeriod)
+            // ---- Интенсивность: только для отмеченных дней, по желанию ----
+            if (_isPeriod && !_loading && _flowOptions.isNotEmpty) ...[
+              const SizedBox(height: LeaSpace.xs),
+              Text(
+                'Интенсивность — если хотите',
+                style: LeaType.caption.copyWith(color: lea.textTertiary),
+              ),
+              const SizedBox(height: LeaSpace.sm),
+              Wrap(
+                spacing: LeaSpace.sm,
+                runSpacing: LeaSpace.sm,
+                children: [
+                  for (final o in _flowOptions)
+                    _FlowChip(
+                      label: L.t(o.titleKey),
+                      selected: _flowId == o.id,
+                      onTap: () => _selectFlow(o.id),
+                    ),
+                ],
+              ),
+              const SizedBox(height: LeaSpace.sm),
+            ],
+            if (!_isPeriod)
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(Icons.date_range, color: lea.phaseMenstrual),
@@ -323,7 +427,7 @@ class _DayActions extends StatelessWidget {
                   'выделить начало и конец в календаре',
                   style: LeaType.caption.copyWith(color: lea.textSecondary),
                 ),
-                onTap: onMarkPeriod,
+                onTap: widget.onMarkPeriod,
               ),
             ListTile(
               contentPadding: EdgeInsets.zero,
@@ -332,7 +436,7 @@ class _DayActions extends StatelessWidget {
                 'Отметить симптомы и заметку',
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary),
               ),
-              onTap: onOpenEntry,
+              onTap: widget.onOpenEntry,
             ),
           ],
         ),
@@ -448,6 +552,43 @@ class _PredictionCardState extends State<_PredictionCard> {
                       style:
                           LeaType.caption.copyWith(color: lea.textTertiary),
                     ),
+                    // ---- Что происходит в этой фазе ----
+                    // Показывается только по раскрытию карточки — не занимает
+                    // место постоянно и не навязывается.
+                    ...(() {
+                      final info =
+                          PhaseInfo.forPhase(_phaseEnum(p, dayInCycle) ??
+                              DayPhase.none);
+                      if (info == null) return <Widget>[];
+                      return <Widget>[
+                        const SizedBox(height: LeaSpace.md),
+                        Divider(color: lea.border, height: 1),
+                        const SizedBox(height: LeaSpace.md),
+                        Text(
+                          info.title,
+                          style: LeaType.subtitle
+                              .copyWith(color: lea.textPrimary),
+                        ),
+                        const SizedBox(height: LeaSpace.xs),
+                        Text(
+                          info.whatHappens,
+                          style: LeaType.label
+                              .copyWith(color: lea.textSecondary),
+                        ),
+                        const SizedBox(height: LeaSpace.sm),
+                        Text(
+                          info.someNotice,
+                          style: LeaType.label
+                              .copyWith(color: lea.textSecondary),
+                        ),
+                        const SizedBox(height: LeaSpace.sm),
+                        Text(
+                          PhaseInfo.disclaimer,
+                          style: LeaType.caption
+                              .copyWith(color: lea.textTertiary),
+                        ),
+                      ];
+                    })(),
                   ],
                 ),
               ),
@@ -527,6 +668,18 @@ class _PredictionCardState extends State<_PredictionCard> {
     return 'лютеиновая фаза';
   }
 
+  /// Та же логика, что в [_phaseLabel], но возвращает фазу как enum —
+  /// чтобы подтянуть описание из PhaseInfo.
+  DayPhase? _phaseEnum(CyclePrediction p, int? dayInCycle) {
+    if (dayInCycle == null) return null;
+    final cycleLen = p.medianCycleLength;
+    final ovulation = cycleLen - lutealForCycle(cycleLen);
+    if (dayInCycle <= 5) return DayPhase.menstrual;
+    if ((dayInCycle - ovulation).abs() <= 1) return DayPhase.ovulation;
+    if (dayInCycle < ovulation) return DayPhase.follicular;
+    return DayPhase.luteal;
+  }
+
   double _cycleProgress(CyclePrediction p) {
     final cycleLen = p.medianCycleLength;
     if (cycleLen <= 0) return 0;
@@ -584,6 +737,44 @@ class _Legend extends StatelessWidget {
         item(lea.phaseLuteal, 'Лютеиновая'),
         item(lea.forecastFill, 'Прогноз', dashed: true),
       ],
+    );
+  }
+}
+
+/// Чип выбора интенсивности менструации. Компактный, необязательный.
+/// Повторный тап по выбранному — снимает выбор.
+class _FlowChip extends StatelessWidget {
+  const _FlowChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    return Material(
+      color: selected ? lea.phaseMenstrual : lea.accentSoft,
+      borderRadius: LeaRadius.buttonBR,
+      child: InkWell(
+        borderRadius: LeaRadius.buttonBR,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: LeaSpace.md,
+            vertical: LeaSpace.sm,
+          ),
+          child: Text(
+            label,
+            style: LeaType.label.copyWith(
+              color: selected ? lea.textOnAccent : lea.textPrimary,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

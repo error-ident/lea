@@ -14,6 +14,8 @@ class MonthGrid extends StatelessWidget {
     required this.selected,
     required this.loggedDays,
     required this.onSelect,
+    this.flowByDate = const {},
+    this.showCycleDay = false,
   });
 
   final DateTime month; // любой день месяца
@@ -22,6 +24,13 @@ class MonthGrid extends StatelessWidget {
   final DateTime? selected;
   final Set<DateTime> loggedDays;
   final ValueChanged<DateTime> onSelect;
+
+  /// День → код интенсивности менструации (light/medium/heavy/clots).
+  /// Дни без интенсивности отсутствуют в карте — красятся базовым цветом.
+  final Map<DateTime, String> flowByDate;
+
+  /// Показывать номер дня цикла мелким шрифтом под числом.
+  final bool showCycleDay;
 
   static const _weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
@@ -50,12 +59,15 @@ class MonthGrid extends StatelessWidget {
 
     for (var d = 1; d <= daysInMonth; d++) {
       final date = DateTime(month.year, month.month, d);
+      final key = DateTime(date.year, date.month, date.day);
       cells.add(DayCell(
         date: date,
         phase: resolver.phaseFor(date),
         isToday: _same(date, today),
         isSelected: selected != null && _same(date, selected!),
-        hasLog: loggedDays.contains(DateTime(date.year, date.month, date.day)),
+        hasLog: loggedDays.contains(key),
+        flowCode: flowByDate[key],
+        cycleDay: showCycleDay ? resolver.cycleDayFor(date) : null,
         inCurrentMonth: true,
         onTap: () => onSelect(date),
       ));

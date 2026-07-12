@@ -9,4 +9,9 @@ abstract final class SettingsKeys {
   static const lockType = 'lock_type'; // none / pin / biometric
   static const backupProvider = 'backup_provider';
   static const backupLastSync = 'backup_last_sync';
+
+  /// Показывать номер дня цикла на клетках календаря.
+  /// По умолчанию ВЫКЛЮЧЕНО — не всем нужно, а календарь без номеров чище.
+  /// (Так же сделано во Flo: опция в настройках, по умолчанию off.)
+  static const showCycleDay = 'show_cycle_day';
 }
