@@ -208,6 +208,57 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Подтвердить предполагаемые дни месячных (пользователь сказал «да, шли»).
+  /// Записываем их как настоящие дни менструации.
+  Future<void> confirmAssumedDays(List<DateTime> days) async {
+    await batch((b) {
+      for (final d in days) {
+        final day = DateTime(d.year, d.month, d.day);
+        b.insert(
+          periodDays,
+          PeriodDaysCompanion.insert(date: day),
+          mode: InsertMode.insertOrIgnore,
+        );
+      }
+    });
+  }
+
+  // ---- Счётчики средств гигиены (прокладки / тампоны / чаша) ----
+  //
+  // Храним в measurements (date + typeCode + value) — новая таблица не нужна.
+  // typeCode: 'pads' | 'tampons' | 'cup'. Для чаши value = число опорожнений.
+  //
+  // Зачем: расход — объективный показатель обильности, точнее субъективного
+  // «скудно/обильно». Плюс полезно в поездках и походах.
+
+  Future<Map<String, int>> hygieneForDay(DateTime date) async {
+    final day = DateTime(date.year, date.month, date.day);
+    final rows = await (select(measurements)
+          ..where((t) => t.date.equals(day))
+          ..where((t) => t.typeCode.isIn(const ['pads', 'tampons', 'cup'])))
+        .get();
+    return {for (final r in rows) r.typeCode: r.value.round()};
+  }
+
+  /// Задать количество. 0 — удаляем запись (чтобы не копить нули).
+  Future<void> setHygieneCount(
+      DateTime date, String typeCode, int count) async {
+    final day = DateTime(date.year, date.month, date.day);
+    await (delete(measurements)
+          ..where((t) => t.date.equals(day))
+          ..where((t) => t.typeCode.equals(typeCode)))
+        .go();
+    if (count <= 0) return;
+    await into(measurements).insert(
+      MeasurementsCompanion.insert(
+        date: day,
+        typeCode: typeCode,
+        value: count.toDouble(),
+        unit: 'шт',
+      ),
+    );
+  }
+
   /// Карта «день → код интенсивности» для раскраски календаря градациями.
   /// Дни без заданной интенсивности в карту не попадают (это нормально —
   /// интенсивность необязательна, такие дни красятся базовым цветом).

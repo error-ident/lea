@@ -139,6 +139,13 @@ class DayCell extends StatelessWidget {
   (Color, Color, bool) _style(LeaColors lea) {
     return switch (phase) {
       DayPhase.menstrual => _menstrualStyle(lea),
+      // Предполагаемые дни — тот же цвет, но бледнее и пунктиром, чтобы
+      // визуально отличались от подтверждённых. Это ДОГАДКА, а не факт.
+      DayPhase.assumedPeriod => (
+          lea.phaseMenstrual.withValues(alpha: 0.30),
+          lea.textPrimary,
+          true,
+        ),
       DayPhase.ovulation => (lea.phaseOvulation, lea.onPhase, false),
       DayPhase.fertileWindow => (
           lea.phaseOvulation.withValues(alpha: 0.25),

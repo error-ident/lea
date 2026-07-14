@@ -177,6 +177,30 @@ final showCycleDayProvider = FutureProvider<bool>((ref) async {
   return v == 'true';
 });
 
+/// Средства гигиены, которыми пользуется человек (pads/tampons/cup).
+/// Пустой набор — счётчики не показываем вовсе (по умолчанию).
+final hygieneProductsProvider = FutureProvider<Set<String>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final v = await db.getSetting(SettingsKeys.hygieneProducts);
+  if (v == null || v.isEmpty) return {};
+  return v.split(',').where((e) => e.isNotEmpty).toSet();
+});
+
+/// Дата, до которой пользователь отклонил подтверждение предполагаемых дней.
+/// null — не отклонял.
+final assumedDismissedProvider = FutureProvider<DateTime?>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final v = await db.getSetting(SettingsKeys.assumedDismissedUntil);
+  if (v == null) return null;
+  final parts = v.split('-');
+  if (parts.length != 3) return null;
+  final y = int.tryParse(parts[0]);
+  final m = int.tryParse(parts[1]);
+  final d = int.tryParse(parts[2]);
+  if (y == null || m == null || d == null) return null;
+  return DateTime(y, m, d);
+});
+
 /// Настройки уведомлений (из settings, JSON).
 final notificationSettingsProvider =
     FutureProvider<NotificationSettings>((ref) async {

@@ -2,15 +2,16 @@ import 'package:flutter_dynamic_icon_plus/flutter_dynamic_icon_plus.dart';
 
 /// Варианты иконки приложения.
 ///
-/// ВАЖНО: имя алиаса должно быть ПОЛНЫМ (с пакетом), т.к. пакет передаёт
-/// строку напрямую в setComponentEnabledSetting, который требует
-/// полное имя класса. Короткое имя ('MainActivityDark') приводит к краху:
-/// "Component class MainActivityDark does not exist in ru.lea.app".
+/// ВАЖНО: имя алиаса — ПОЛНОЕ (с пакетом), т.к. пакет передаёт строку
+/// напрямую в setComponentEnabledSetting, который требует полное имя класса.
 ///
-/// cream — основная MainActivity (aliasName == null, сброс на дефолт).
-/// blush/dark — activity-alias из манифеста.
+/// Все три варианта — activity-alias, включая кремовую (дефолтную).
+/// ПОЧЕМУ: если бы дефолтом была сама MainActivity с LAUNCHER-фильтром, то
+/// при включении другого алиаса она оставалась бы включённой и в лаунчере
+/// появлялись бы ДВЕ иконки. Каноническая схема — MainActivity без LAUNCHER,
+/// каждая иконка отдельный alias.
 enum AppIconVariant {
-  cream(null, 'Кремовая'),
+  cream(null, 'Кремовая'), // основная MainActivity
   blush('ru.lea.app.MainActivityBlush', 'Румянец'),
   dark('ru.lea.app.MainActivityDark', 'Тёмная');
 
@@ -21,6 +22,11 @@ enum AppIconVariant {
 
 /// Переключение иконки без перезапуска (DONT_KILL_APP внутри пакета).
 class AppIconService {
+  /// Защита на уровне сервиса: не даём наложиться двум сменам иконки.
+  /// Пакет применяет иконку асинхронно (перезапуск активности), и
+  /// параллельные вызовы setComponentEnabledSetting роняют приложение.
+  static bool _changing = false;
+
   static Future<AppIconVariant> current() async {
     try {
       final name = await FlutterDynamicIconPlus.alternateIconName;
@@ -38,11 +44,14 @@ class AppIconService {
   }
 
   static Future<bool> set(AppIconVariant variant) async {
+    // Уже идёт смена — отклоняем. Параллельные вызовы роняют приложение.
+    if (_changing) return false;
+    _changing = true;
     try {
       if (!await FlutterDynamicIconPlus.supportsAlternateIcons) {
         return false;
       }
-      // cream → сброс на основную иконку (aliasName == null)
+      // Все варианты — полноценные алиасы (включая кремовую).
       //
       // blacklist* — для устройств, где onTaskRemoved не вызывается
       // (Huawei/Xiaomi и клоны). Для них пакет использует старый подход
@@ -66,6 +75,12 @@ class AppIconService {
       return true;
     } catch (_) {
       return false;
+    } finally {
+      // Отпускаем замок с задержкой: система применяет иконку асинхронно,
+      // и немедленный повторный вызов попадёт в момент перезапуска.
+      Future<void>.delayed(const Duration(seconds: 3), () {
+        _changing = false;
+      });
     }
   }
 }

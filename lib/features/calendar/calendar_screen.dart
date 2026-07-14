@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lea_design/lea_design.dart';
 
 import '../../core/database/app_database.dart';
+import '../../core/database/settings_keys.dart';
 import '../../core/prediction/cycle_prediction.dart';
 import '../../core/prediction/predict_cycle.dart';
 import '../../core/providers/providers.dart';
@@ -56,11 +57,25 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(_greeting(today),
-                style: LeaType.h1.copyWith(color: lea.textPrimary)),
+            // Длинные фразы («Доброе утро, ты прекрасна 💛») не влезали в одну
+            // строку и обрезались. FittedBox ужимает текст до ширины, не
+            // обрезая, а maxLines/ellipsis страхует на совсем длинных.
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _greeting(today),
+                maxLines: 1,
+                style: LeaType.h1.copyWith(color: lea.textPrimary),
+              ),
+            ),
             const SizedBox(height: 2),
-            Text(_todayLabel(today),
-                style: LeaType.body.copyWith(color: lea.textSecondary)),
+            Text(
+              _todayLabel(today),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: LeaType.body.copyWith(color: lea.textSecondary),
+            ),
           ],
         ),
       ),
@@ -89,9 +104,12 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
               <DateTime, String>{};
           final showCycleDay =
               ref.watch(showCycleDayProvider).valueOrNull ?? false;
+          final assumedDismissed =
+              ref.watch(assumedDismissedProvider).valueOrNull;
           final resolver = DayPhaseResolver(
             periodDays: periodDates,
             prediction: pred,
+            assumedDismissedUntil: assumedDismissed,
           );
 
           // главный экран: текущий + следующий месяц (чтобы прогноз был виден),
@@ -115,6 +133,32 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
                 vertical: LeaSpace.lg,
               ),
               children: [
+                // Баннер подтверждения предполагаемых дней месячных.
+                // Показывается, если человек отметил старт и не заходил —
+                // мы достроили дни, но НЕ записали их: спрашиваем.
+                if (resolver.hasAssumedDays)
+                  _AssumedPeriodBanner(
+                    days: resolver.assumedDays,
+                    onConfirm: () async {
+                      final db = ref.read(databaseProvider);
+                      await db.confirmAssumedDays(resolver.assumedDays);
+                      ref.invalidate(cycleStartsProvider);
+                      ref.invalidate(periodDaysStreamProvider);
+                      ref.invalidate(predictionProvider);
+                      ref.invalidate(flowByDateProvider);
+                    },
+                    onDismiss: () async {
+                      // «Уже закончились» — ничего не пишем, но чтобы баннер
+                      // не возвращался, помечаем последнюю отметку как конец.
+                      // Проще всего: запоминаем дату отклонения в настройках.
+                      final db = ref.read(databaseProvider);
+                      await db.setSetting(
+                        SettingsKeys.assumedDismissedUntil,
+                        DateTime.now().toIso8601String().split('T').first,
+                      );
+                      ref.invalidate(assumedDismissedProvider);
+                    },
+                  ),
                 _PredictionCard(prediction: pred),
                 const SizedBox(height: LeaSpace.lg),
                 _Legend(),
@@ -319,6 +363,12 @@ class _DayActionsState extends ConsumerState<_DayActions> {
   int? _flowId;
   bool _loading = true;
 
+  /// Номер дня цикла для этой даты (null — вне известных циклов).
+  int? _cycleDay;
+
+  /// Счётчики средств гигиены за этот день (код → количество).
+  Map<String, int> _hygiene = const {};
+
   @override
   void initState() {
     super.initState();
@@ -329,12 +379,49 @@ class _DayActionsState extends ConsumerState<_DayActions> {
     final db = ref.read(databaseProvider);
     final opts = await db.flowIntensityOptions();
     final flow = _isPeriod ? await db.flowForDay(widget.date) : null;
+    final cycleDay = await _computeCycleDay();
+    final hygiene = await db.hygieneForDay(widget.date);
     if (!mounted) return;
     setState(() {
       _flowOptions = opts;
       _flowId = flow;
+      _cycleDay = cycleDay;
+      _hygiene = hygiene;
       _loading = false;
     });
+  }
+
+  Future<void> _bumpHygiene(String code, int delta) async {
+    final current = _hygiene[code] ?? 0;
+    final next = (current + delta).clamp(0, 99);
+    if (next == current) return;
+    final db = ref.read(databaseProvider);
+    await db.setHygieneCount(widget.date, code, next);
+    ref.invalidate(datesWithEntriesProvider);
+    if (!mounted) return;
+    setState(() {
+      final m = Map<String, int>.from(_hygiene);
+      if (next == 0) {
+        m.remove(code);
+      } else {
+        m[code] = next;
+      }
+      _hygiene = m;
+    });
+  }
+
+  /// День цикла = дата − начало цикла, в который она попадает, + 1.
+  Future<int?> _computeCycleDay() async {
+    try {
+      final periodDays = await ref.read(periodDaysStreamProvider.future);
+      final resolver = DayPhaseResolver(
+        periodDays: periodDays.map((r) => r.date).toList(),
+        prediction: await ref.read(predictionProvider.future),
+      );
+      return resolver.cycleDayFor(widget.date);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _togglePeriod() async {
@@ -378,8 +465,27 @@ class _DayActionsState extends ConsumerState<_DayActions> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(_fmt(widget.date),
-                style: LeaType.h2.copyWith(color: lea.textPrimary)),
+           Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Flexible(
+                  child: Text(
+                    _fmt(widget.date),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: LeaType.h2.copyWith(color: lea.textPrimary),
+                  ),
+                ),
+                if (_cycleDay != null) ...[
+                  const SizedBox(width: LeaSpace.sm),
+                  Text(
+                    '· $_cycleDay-й день',
+                    style: LeaType.body.copyWith(color: lea.textSecondary),
+                  ),
+                ],
+              ],
+            ),
             const SizedBox(height: LeaSpace.lg),
             ListTile(
               contentPadding: EdgeInsets.zero,
@@ -415,6 +521,38 @@ class _DayActionsState extends ConsumerState<_DayActions> {
               ),
               const SizedBox(height: LeaSpace.sm),
             ],
+            // ---- Счётчики средств гигиены (только выбранные в настройках) ----
+            Builder(builder: (context) {
+              final products =
+                  ref.watch(hygieneProductsProvider).valueOrNull ??
+                      const <String>{};
+              if (products.isEmpty) return const SizedBox.shrink();
+              const labels = {
+                'pads': 'Прокладки',
+                'tampons': 'Тампоны',
+                'cup': 'Чаша',
+              };
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: LeaSpace.xs),
+                  Text(
+                    'Расход за день',
+                    style: LeaType.caption.copyWith(color: lea.textTertiary),
+                  ),
+                  const SizedBox(height: LeaSpace.sm),
+                  for (final code in ['pads', 'tampons', 'cup'])
+                    if (products.contains(code))
+                      _HygieneCounter(
+                        label: labels[code]!,
+                        count: _hygiene[code] ?? 0,
+                        onMinus: () => _bumpHygiene(code, -1),
+                        onPlus: () => _bumpHygiene(code, 1),
+                      ),
+                  const SizedBox(height: LeaSpace.sm),
+                ],
+              );
+            }),
             if (!_isPeriod)
               ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -511,15 +649,26 @@ class _PredictionCardState extends State<_PredictionCard> {
                   ),
                 ),
                 const SizedBox(width: LeaSpace.lg),
-                CycleRingPainted(
-                  progress: _cycleProgress(p),
-                  size: _expanded ? 96 : 72,
+                // Кольцо меняло размер СКАЧКОМ (size: _expanded ? 96 : 72).
+                // TweenAnimationBuilder анимирует от прошлого значения к новому
+                // при каждой смене end — раскрытие становится плавным.
+                TweenAnimationBuilder<double>(
+                  tween: Tween<double>(end: _expanded ? 96 : 72),
+                  duration: const Duration(milliseconds: 280),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, size, _) => CycleRingPainted(
+                    progress: _cycleProgress(p),
+                    size: size,
+                  ),
                 ),
               ],
             ),
             // раскрываемые детали по тапу
             AnimatedCrossFade(
-              duration: const Duration(milliseconds: 200),
+              duration: const Duration(milliseconds: 280),
+              sizeCurve: Curves.easeOutCubic,
+              firstCurve: Curves.easeOut,
+              secondCurve: Curves.easeIn,
               crossFadeState: _expanded
                   ? CrossFadeState.showSecond
                   : CrossFadeState.showFirst,
@@ -772,6 +921,169 @@ class _FlowChip extends StatelessWidget {
             style: LeaType.label.copyWith(
               color: selected ? lea.textOnAccent : lea.textPrimary,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Баннер: спрашиваем, шли ли месячные в предполагаемые дни.
+///
+/// Появляется, когда человек отметил начало месячных и не заходил в
+/// приложение. Мы достроили дни по его личной длине менструации, показали
+/// их бледным пунктиром — но НЕ записали. Здесь просим подтвердить.
+///
+/// Так мы не теряем данные (если он просто забыл отмечать), но и не выдаём
+/// догадку за факт (если месячные кончились раньше).
+class _AssumedPeriodBanner extends StatelessWidget {
+  const _AssumedPeriodBanner({
+    required this.days,
+    required this.onConfirm,
+    required this.onDismiss,
+  });
+
+  final List<DateTime> days;
+  final Future<void> Function() onConfirm;
+  final Future<void> Function() onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    final range = days.length == 1
+        ? _short(days.first)
+        : '${_short(days.first)} — ${_short(days.last)}';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: LeaSpace.lg),
+      padding: const EdgeInsets.all(LeaSpace.lg),
+      decoration: BoxDecoration(
+        color: lea.surface,
+        borderRadius: LeaRadius.cardBR,
+        border: Border.all(color: lea.phaseMenstrual, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Месячные ещё шли?',
+            style: LeaType.subtitle.copyWith(color: lea.textPrimary),
+          ),
+          const SizedBox(height: LeaSpace.xs),
+          Text(
+            'Похоже, вы не отмечали дни: $range. '
+            'Если месячные продолжались — отметим их.',
+            style: LeaType.label.copyWith(color: lea.textSecondary),
+          ),
+          const SizedBox(height: LeaSpace.md),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: lea.phaseMenstrual,
+                    foregroundColor: lea.onPhase,
+                  ),
+                  onPressed: () => onConfirm(),
+                  child: const Text('Да, шли'),
+                ),
+              ),
+              const SizedBox(width: LeaSpace.sm),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => onDismiss(),
+                  child: Text(
+                    'Уже закончились',
+                    style: LeaType.label.copyWith(color: lea.textPrimary),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _short(DateTime d) {
+    const m = [
+      'янв', 'фев', 'мар', 'апр', 'мая', 'июн',
+      'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'
+    ];
+    return '${d.day} ${m[d.month - 1]}';
+  }
+}
+
+/// Счётчик расхода средства гигиены за день: «Прокладки  − 3 +».
+/// Показывается только для средств, выбранных в настройках.
+class _HygieneCounter extends StatelessWidget {
+  const _HygieneCounter({
+    required this.label,
+    required this.count,
+    required this.onMinus,
+    required this.onPlus,
+  });
+
+  final String label;
+  final int count;
+  final VoidCallback onMinus;
+  final VoidCallback onPlus;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: LeaSpace.xs),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: LeaType.label.copyWith(color: lea.textPrimary),
+            ),
+          ),
+          _RoundBtn(
+            icon: Icons.remove,
+            onTap: count > 0 ? onMinus : null,
+          ),
+          SizedBox(
+            width: 36,
+            child: Text(
+              '$count',
+              textAlign: TextAlign.center,
+              style: LeaType.subtitle.copyWith(
+                color: count > 0 ? lea.textPrimary : lea.textTertiary,
+              ),
+            ),
+          ),
+          _RoundBtn(icon: Icons.add, onTap: onPlus),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoundBtn extends StatelessWidget {
+  const _RoundBtn({required this.icon, required this.onTap});
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    final enabled = onTap != null;
+    return Material(
+      color: enabled ? lea.accentSoft : lea.accentSoft.withValues(alpha: 0.4),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            icon,
+            size: LeaIconSize.sm,
+            color: enabled ? lea.accent : lea.textTertiary,
           ),
         ),
       ),

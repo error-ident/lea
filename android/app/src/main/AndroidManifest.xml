@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Уведомления и точные напоминания -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
@@ -25,8 +26,15 @@
             android:name="com.solusibejo.flutter_dynamic_icon_plus.FlutterDynamicIconPlusService"
             android:stopWithTask="false" />
 
-        <!-- Основная активность = вариант «Кремовая», С launcher.
-             Flutter находит launcher именно тут. Это дефолтная иконка. -->
+        <!-- MainActivity: enabled="false" и БЕЗ launcher intent-filter.
+             ПОЧЕМУ enabled=false: Flutter-тулинг (aapt) ищет точку входа и,
+             если MainActivity включена, требует LAUNCHER именно на ней.
+             Выключив её, мы заставляем тулинг найти включённый alias
+             (.MainActivityCream) как точку входа.
+             ПОЧЕМУ без LAUNCHER: если LAUNCHER стоит и здесь, и на алиасах,
+             при включении алиаса MainActivity остаётся включённой →
+             в лаунчере появляются ДВЕ иконки.
+             Сама активность запускается через targetActivity алиасов. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

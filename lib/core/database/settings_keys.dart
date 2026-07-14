@@ -14,4 +14,13 @@ abstract final class SettingsKeys {
   /// По умолчанию ВЫКЛЮЧЕНО — не всем нужно, а календарь без номеров чище.
   /// (Так же сделано во Flo: опция в настройках, по умолчанию off.)
   static const showCycleDay = 'show_cycle_day';
+
+  /// До какой даты пользователь отклонил предложение подтвердить
+  /// предполагаемые дни месячных («уже закончились»). Чтобы баннер
+  /// не возвращался снова и снова.
+  static const assumedDismissedUntil = 'assumed_dismissed_until';
+
+  /// Какими средствами гигиены пользуется (через запятую: pads,tampons,cup).
+  /// Пусто — счётчики не показываются вовсе.
+  static const hygieneProducts = 'hygiene_products';
 }

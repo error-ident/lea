@@ -12,6 +12,7 @@ import '../about/about_screen.dart';
 import '../about/support_screen.dart';
 import '../lock/set_pin_screen.dart';
 import '../notifications/notifications_screen.dart';
+import 'appearance_screen.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -19,8 +20,6 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final lea = context.lea;
-    final dark = ref.watch(darkModeProvider);
-    final themeId = ref.watch(themeIdProvider);
 
     return Scaffold(
       backgroundColor: lea.background,
@@ -28,37 +27,12 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(LeaSpace.xl),
         children: [
-          Text('ТЕМА',
-              style: LeaType.sectionLabel.copyWith(color: lea.textTertiary)),
-          const SizedBox(height: LeaSpace.md),
-          Wrap(
-            spacing: LeaSpace.sm,
-            children: [
-              for (final id in const [
-                LeaThemeId.cream,
-                LeaThemeId.lavender,
-                LeaThemeId.sage,
-                LeaThemeId.strawberry,
-              ])
-                ChoiceChip(
-                  label: Text(_name(id)),
-                  selected: themeId == id,
-                  onSelected: (_) =>
-                      ref.read(themeIdProvider.notifier).set(id),
-                ),
-            ],
-          ),
           const SizedBox(height: LeaSpace.lg),
-          SwitchListTile(
-            title: Text('Тёмная тема',
-                style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
-            value: dark,
-            activeThumbColor: lea.accent,
-            onChanged: (v) => ref.read(darkModeProvider.notifier).set(v),
-          ),
           // Номера дней цикла на календаре — по умолчанию ВЫКЛЮЧЕНО.
           // Не всем нужно, а без номеров календарь читается чище.
           SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            secondary: Icon(Icons.tag, color: lea.accent),
             title: Text('Номер дня цикла на календаре',
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
             subtitle: Text(
@@ -73,54 +47,84 @@ class SettingsScreen extends ConsumerWidget {
               ref.invalidate(showCycleDayProvider);
             },
           ),
+          // Средства гигиены — какие счётчики показывать в дне.
+          // По умолчанию НИЧЕГО не выбрано: счётчиков нет, никому не мешают.
           const SizedBox(height: LeaSpace.lg),
-          Text('ИКОНКА ПРИЛОЖЕНИЯ',
+          Text('СРЕДСТВА ГИГИЕНЫ',
               style: LeaType.sectionLabel.copyWith(color: lea.textTertiary)),
+          const SizedBox(height: LeaSpace.xs),
+          Text(
+            'Отметьте, чем пользуетесь — в дне появятся счётчики расхода',
+            style: LeaType.caption.copyWith(color: lea.textSecondary),
+          ),
           const SizedBox(height: LeaSpace.md),
-          const _IconPicker(),
+          const _HygienePicker(),
+          const SizedBox(height: LeaSpace.lg),
           const Divider(),
           ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.palette_outlined, color: lea.accent),
+            title: Text('Оформление',
+                style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
+            subtitle: Text('тема, тёмный режим, иконка',
+                style: LeaType.caption.copyWith(color: lea.textSecondary)),
+            trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AppearanceScreen()),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.notifications_outlined, color: lea.accent),
             title: Text('Напоминания',
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
             subtitle: Text('Что напоминать, нейтральный текст',
                 style: LeaType.caption.copyWith(color: lea.textSecondary)),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const NotificationsScreen()),
             ),
           ),
           ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.lock_outline, color: lea.accent),
             title: Text('Защита входа',
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
             subtitle: Text('PIN / отпечаток / лицо',
                 style: LeaType.caption.copyWith(color: lea.textSecondary)),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
             onTap: () => _openLockSettings(context),
           ),
           ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.backup_outlined, color: lea.accent),
             title: Text('Резервная копия',
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
             subtitle: Text('Зашифрованный файл',
                 style: LeaType.caption.copyWith(color: lea.textSecondary)),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const BackupScreen()),
             ),
           ),
           ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.info_outline, color: lea.accent),
             title: Text('О приложении',
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
             subtitle: Text('Приватность, методика, источники',
                 style: LeaType.caption.copyWith(color: lea.textSecondary)),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const AboutScreen()),
             ),
           ),
           ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.favorite_outline, color: lea.accent),
             title: Text('Поддержать разработку',
                 style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
-            trailing: const Icon(Icons.favorite_border),
+            trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const SupportScreen()),
             ),
@@ -129,14 +133,6 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
   }
-
-  String _name(LeaThemeId id) => switch (id) {
-        LeaThemeId.cream => 'Крем',
-        LeaThemeId.lavender => 'Лаванда',
-        LeaThemeId.sage => 'Шалфей',
-        LeaThemeId.coal => 'Уголь',
-        LeaThemeId.strawberry => 'Клубничка',
-      };
 
   Future<void> _openLockSettings(BuildContext context) async {
     final lock = LockService();
@@ -218,16 +214,23 @@ class SettingsScreen extends ConsumerWidget {
 }
 
 /// Выбор иконки приложения — три превью-карточки.
-class _IconPicker extends StatefulWidget {
-  const _IconPicker();
+class IconPicker extends StatefulWidget {
+  const IconPicker({super.key});
 
   @override
-  State<_IconPicker> createState() => _IconPickerState();
+  State<IconPicker> createState() => IconPickerState();
 }
 
-class _IconPickerState extends State<_IconPicker> {
+class IconPickerState extends State<IconPicker> {
   AppIconVariant _current = AppIconVariant.cream;
   bool _busy = false;
+
+  /// Время последней успешной смены. Нужен cooldown: пакет применяет иконку
+  /// асинхронно (через перезапуск активности), и частые повторные вызовы
+  /// накладываются друг на друга — приложение падало/закрывалось.
+  /// Аналогичный throttle встроен в другие пакеты смены иконок.
+  DateTime? _lastChange;
+  static const _cooldown = Duration(seconds: 5);
 
   @override
   void initState() {
@@ -238,15 +241,38 @@ class _IconPickerState extends State<_IconPicker> {
   }
 
   Future<void> _select(AppIconVariant v) async {
-    if (_busy || v == _current) return;
+    // 1) уже идёт смена — игнорируем
+    if (_busy) return;
+    // 2) тап по уже активной иконке — ничего не делаем
+    if (v == _current) return;
+    // 3) cooldown: не даём дёргать систему чаще, чем раз в несколько секунд
+    final last = _lastChange;
+    if (last != null && DateTime.now().difference(last) < _cooldown) {
+      final left = _cooldown - DateTime.now().difference(last);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Подождите ${left.inSeconds + 1} с — иконка ещё применяется',
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
     setState(() => _busy = true);
     final ok = await AppIconService.set(v);
     if (!mounted) return;
-    setState(() {
-      _busy = false;
-      if (ok) _current = v;
-    });
-    if (!ok) {
+
+    if (ok) {
+      _lastChange = DateTime.now();
+      setState(() => _current = v);
+      // _busy держим ещё немного: система применяет иконку асинхронно,
+      // и в этот момент повторный вызов роняет приложение.
+      await Future<void>.delayed(const Duration(seconds: 2));
+      if (mounted) setState(() => _busy = false);
+    } else {
+      setState(() => _busy = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Не удалось сменить иконку')),
       );
@@ -255,20 +281,30 @@ class _IconPickerState extends State<_IconPicker> {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        for (final v in AppIconVariant.values) ...[
-          Expanded(
-            child: _IconCard(
-              variant: v,
-              selected: v == _current,
-              onTap: () => _select(v),
-            ),
-          ),
-          if (v != AppIconVariant.values.last)
-            const SizedBox(width: LeaSpace.sm),
-        ],
-      ],
+    // Во время применения иконки блокируем весь ряд: и логически (IgnorePointer),
+    // и визуально (притухание). Иначе пользователь тыкает, не понимая, почему
+    // нет реакции, и накликивает падение.
+    return IgnorePointer(
+      ignoring: _busy,
+      child: AnimatedOpacity(
+        opacity: _busy ? 0.5 : 1.0,
+        duration: const Duration(milliseconds: 150),
+        child: Row(
+          children: [
+            for (final v in AppIconVariant.values) ...[
+              Expanded(
+                child: _IconCard(
+                  variant: v,
+                  selected: v == _current,
+                  onTap: () => _select(v),
+                ),
+              ),
+              if (v != AppIconVariant.values.last)
+                const SizedBox(width: LeaSpace.sm),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
@@ -368,4 +404,49 @@ class _WhitePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_WhitePainter old) => false;
+}
+
+/// Выбор средств гигиены. По умолчанию ничего не выбрано — счётчиков
+/// в дне нет, они не мешают тем, кому не нужны.
+class _HygienePicker extends ConsumerWidget {
+  const _HygienePicker();
+
+  static const _labels = {
+    'pads': 'Прокладки',
+    'tampons': 'Тампоны',
+    'cup': 'Чаша',
+  };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final selected =
+        ref.watch(hygieneProductsProvider).valueOrNull ?? const <String>{};
+
+    return Wrap(
+      spacing: LeaSpace.sm,
+      runSpacing: LeaSpace.sm,
+      children: [
+        for (final e in _labels.entries)
+          FilterChip(
+            label: Text(e.value),
+            selected: selected.contains(e.key),
+            showCheckmark: false,
+            onSelected: (on) async {
+              final next = Set<String>.from(selected);
+              if (on) {
+                next.add(e.key);
+              } else {
+                next.remove(e.key);
+              }
+              final db = ref.read(databaseProvider);
+              await db.setSetting(
+                SettingsKeys.hygieneProducts,
+                next.join(','),
+              );
+              ref.invalidate(hygieneProductsProvider);
+            },
+          ),
+      ],
+    );
+  }
 }

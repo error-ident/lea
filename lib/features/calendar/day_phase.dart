@@ -5,7 +5,10 @@ import '../../core/prediction/predict_cycle.dart';
 /// Фаза/статус дня для раскраски ячейки календаря.
 enum DayPhase {
   none,
-  menstrual, // фактические дни менструации
+  menstrual, // фактические дни менструации (подтверждённые пользователем)
+  assumedPeriod, // ПРЕДПОЛАГАЕМОЕ продолжение месячных (человек отметил старт
+  // и не заходил). Показываем мягче, в расчёт цикла НЕ берём — только после
+  // подтверждения пользователем.
   follicular,
   ovulation,
   luteal,
@@ -28,6 +31,7 @@ class DayPhaseResolver {
   DayPhaseResolver({
     required this.periodDays,
     required this.prediction,
+    this.assumedDismissedUntil,
   })  : _periodSet = periodDays
             .map((d) => DateTime(d.year, d.month, d.day))
             .toSet(),
@@ -35,8 +39,87 @@ class DayPhaseResolver {
 
   final List<DateTime> periodDays;
   final CyclePrediction prediction;
+
+  /// Дата, до которой пользователь сказал «месячные уже закончились».
+  /// Если последняя отметка не позже этой даты — предполагаемые дни не строим
+  /// (иначе баннер возвращался бы снова и снова).
+  final DateTime? assumedDismissedUntil;
+
   final Set<DateTime> _periodSet;
   final List<CycleRecord> _cycles;
+
+  /// Личная медиана длины менструации (сколько дней обычно идут месячные).
+  /// Нужна, чтобы понять, сколько дней после последней отметки ЕЩЁ можно
+  /// считать продолжением. Если истории нет — берём 5 (среднее по Mihm 2011).
+  late final int _typicalPeriodLength = _computeTypicalPeriodLength();
+
+  int _computeTypicalPeriodLength() {
+    final lens = _cycles
+        .map((c) => c.periodLength)
+        .where((l) => l >= 2 && l <= 10)
+        .toList()
+      ..sort();
+    if (lens.isEmpty) return 5;
+    return lens[lens.length ~/ 2];
+  }
+
+  /// Дни, которые МЫ ПРЕДПОЛАГАЕМ как продолжение текущих месячных.
+  ///
+  /// Сценарий: человек отметил старт и не заходил в приложение. Раньше
+  /// отмечался ровно один день, и месячные «обрывались». Теперь мы
+  /// достраиваем предполагаемые дни (по личной длине менструации), но:
+  ///   • показываем их ОТДЕЛЬНЫМ цветом (не как подтверждённые);
+  ///   • НЕ пишем в БД и НЕ учитываем в расчёте цикла;
+  ///   • при следующем входе спрашиваем подтверждение.
+  /// Так мы не теряем данные, но и не выдаём догадку за факт.
+  late final Set<DateTime> _assumedDays = _computeAssumedDays();
+
+  Set<DateTime> _computeAssumedDays() {
+    if (_periodSet.isEmpty) return {};
+
+    // Последняя отмеченная дата.
+    final last = _periodSet.reduce((a, b) => a.isAfter(b) ? a : b);
+
+    // Пользователь уже сказал «месячные закончились» для этой серии —
+    // не достраиваем и не показываем баннер повторно.
+    final dismissed = assumedDismissedUntil;
+    if (dismissed != null && !last.isAfter(dismissed)) return {};
+
+    // Считаем, сколько дней подряд уже отмечено, заканчивая последней датой.
+    var confirmedStreak = 0;
+    var cursor = last;
+    while (_periodSet.contains(cursor)) {
+      confirmedStreak++;
+      cursor = cursor.subtract(const Duration(days: 1));
+    }
+
+    // Если подтверждённых дней уже больше типичной длины — не достраиваем.
+    if (confirmedStreak >= _typicalPeriodLength) return {};
+
+    final out = <DateTime>{};
+    // Достраиваем от дня ПОСЛЕ последней отметки, но не дальше сегодня и не
+    // дольше типичной длины менструации.
+    for (var i = 1; i <= _typicalPeriodLength - confirmedStreak; i++) {
+      final d = last.add(Duration(days: i));
+      if (_periodSet.contains(d)) continue; // уже подтверждён
+      out.add(d);
+    }
+    return out;
+  }
+
+
+  Set<DateTime> _pastAssumed() {
+    final now = DateTime.now();
+    final todayDay = DateTime(now.year, now.month, now.day);
+    return _assumedDays.where((d) => d.isBefore(todayDay)).toSet();
+  }
+
+  /// Есть ли ПРОШЛЫЕ предполагаемые дни, которые стоит попросить подтвердить.
+  /// Будущие дни в баннер не идут — они ещё не наступили.
+  bool get hasAssumedDays => _pastAssumed().isNotEmpty;
+
+  /// Прошлые предполагаемые дни (для баннера подтверждения).
+  List<DateTime> get assumedDays => _pastAssumed().toList()..sort();
 
   // Лютеиновая фаза считается динамически по длине цикла через
   // lutealForCycle(...) — единая функция с движком прогноза, чтобы
@@ -48,13 +131,16 @@ class DayPhaseResolver {
     // 1. Фактическая менструация — всегда приоритет (что отмечено, то и есть).
     if (_periodSet.contains(day)) return DayPhase.menstrual;
 
-    // 2. Ищем цикл, в который попадает день (по истории).
+    // 2. Предполагаемое продолжение месячных (не подтверждено пользователем).
+    if (_assumedDays.contains(day)) return DayPhase.assumedPeriod;
+
+    // 3. Ищем цикл, в который попадает день (по истории).
     final cycle = _cycleFor(day);
     if (cycle != null) {
       return _phaseInCycle(day, cycle);
     }
 
-    // 3. День в будущем (после последнего известного цикла) — работает прогноз.
+    // 4. День в будущем (после последнего известного цикла) — работает прогноз.
     return _forecastPhase(day);
   }
 
