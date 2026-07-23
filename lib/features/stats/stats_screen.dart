@@ -259,12 +259,12 @@ class _HistoryHeader extends StatelessWidget {
 }
 
 /// Строка цикла: дата, длина, ряд точек по дням (фазы).
-class _CycleRow extends StatelessWidget {
+class _CycleRow extends ConsumerWidget {
   const _CycleRow({required this.record});
   final CycleRecord record;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final lea = context.lea;
     final r = record;
 
@@ -293,6 +293,8 @@ class _CycleRow extends StatelessWidget {
           ),
           const SizedBox(height: LeaSpace.sm),
           _DotsRow(record: r),
+          // Расход средств гигиены за менструацию этого цикла.
+          _HygieneSummary(record: r),
         ],
       ),
     );
@@ -351,6 +353,62 @@ class _DotsRow extends StatelessWidget {
       width: 9,
       height: 9,
       decoration: BoxDecoration(shape: BoxShape.circle, color: c),
+    );
+  }
+}
+
+/// Сводка расхода средств гигиены за менструацию цикла.
+/// Показывается ТОЛЬКО если расход вводился — иначе ничего не рисуем,
+/// чтобы не мусорить в истории у тех, кто счётчиками не пользуется.
+///
+/// Данные берутся из hygieneAllByDateProvider — он грузит весь расход ОДНИМ
+/// запросом, а здесь мы лишь суммируем нужный диапазон локально. Раньше был
+/// FutureBuilder с запросом к БД на каждую строку истории.
+class _HygieneSummary extends ConsumerWidget {
+  const _HygieneSummary({required this.record});
+  final CycleRecord record;
+
+  static const _labels = {
+    'pads': 'прокладки',
+    'tampons': 'тампоны',
+    'cup': 'чаша',
+  };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final lea = context.lea;
+    final all = ref.watch(hygieneAllByDateProvider).valueOrNull;
+    if (all == null || all.isEmpty) return const SizedBox.shrink();
+
+    // Менструация цикла: от начала цикла на periodLength дней.
+    final start = DateTime(
+        record.startDate.year, record.startDate.month, record.startDate.day);
+    final lastDay = (record.periodLength - 1).clamp(0, 14);
+
+    final total = <String, int>{};
+    for (var i = 0; i <= lastDay; i++) {
+      final day = start.add(Duration(days: i));
+      final m = all[day];
+      if (m == null) continue;
+      for (final e in m.entries) {
+        total[e.key] = (total[e.key] ?? 0) + e.value;
+      }
+    }
+    if (total.isEmpty) return const SizedBox.shrink();
+
+    final parts = <String>[];
+    for (final e in _labels.entries) {
+      final n = total[e.key] ?? 0;
+      if (n > 0) parts.add('${e.value} — $n');
+    }
+    if (parts.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: LeaSpace.xs),
+      child: Text(
+        'Расход: ${parts.join(', ')}',
+        style: LeaType.caption.copyWith(color: lea.textTertiary),
+      ),
     );
   }
 }

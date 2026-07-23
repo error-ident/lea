@@ -398,6 +398,9 @@ class _DayActionsState extends ConsumerState<_DayActions> {
     final db = ref.read(databaseProvider);
     await db.setHygieneCount(widget.date, code, next);
     ref.invalidate(datesWithEntriesProvider);
+    // Инвалидируем общую карту — производные провайдеры (итог за месячные,
+    // сводка в статистике) пересчитаются сами, они её watch-ят.
+    ref.invalidate(hygieneAllByDateProvider);
     if (!mounted) return;
     setState(() {
       final m = Map<String, int>.from(_hygiene);
@@ -549,6 +552,29 @@ class _DayActionsState extends ConsumerState<_DayActions> {
                         onMinus: () => _bumpHygiene(code, -1),
                         onPlus: () => _bumpHygiene(code, 1),
                       ),
+                  // Итог за текущие месячные — чтобы счётчик не был «дыркой
+                  // в никуда», а давал понятную сводку.
+                  Builder(builder: (context) {
+                    final total =
+                        ref.watch(currentPeriodHygieneProvider).valueOrNull ??
+                            const <String, int>{};
+                    final parts = <String>[];
+                    for (final code in ['pads', 'tampons', 'cup']) {
+                      final n = total[code] ?? 0;
+                      if (n > 0 && products.contains(code)) {
+                        parts.add('${labels[code]!.toLowerCase()} — $n');
+                      }
+                    }
+                    if (parts.isEmpty) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: LeaSpace.xs),
+                      child: Text(
+                        'За эти месячные: ${parts.join(', ')}',
+                        style:
+                            LeaType.caption.copyWith(color: lea.textSecondary),
+                      ),
+                    );
+                  }),
                   const SizedBox(height: LeaSpace.sm),
                 ],
               );

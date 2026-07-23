@@ -186,6 +186,52 @@ final hygieneProductsProvider = FutureProvider<Set<String>>((ref) async {
   return v.split(',').where((e) => e.isNotEmpty).toSet();
 });
 
+/// Весь расход средств гигиены по дням — грузится ОДНИМ запросом.
+/// Экран статистики берёт данные отсюда и суммирует по диапазонам локально,
+/// вместо запроса к БД на каждую строку истории.
+final hygieneAllByDateProvider =
+    FutureProvider<Map<DateTime, Map<String, int>>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  return db.hygieneAllByDate();
+});
+
+/// Итог расхода средств гигиены за ТЕКУЩИЕ месячные.
+/// Считается от первого дня последней непрерывной серии отмеченных дней.
+/// Пусто — если месячные не идут или расход не вводился.
+final currentPeriodHygieneProvider =
+    FutureProvider<Map<String, int>>((ref) async {
+  final rows = await ref.watch(periodDaysStreamProvider.future);
+  if (rows.isEmpty) return {};
+  // Берём общую карту — тот же кэш, что использует статистика.
+  final all = await ref.watch(hygieneAllByDateProvider.future);
+  if (all.isEmpty) return {};
+
+  final days = rows
+      .map((r) => DateTime(r.date.year, r.date.month, r.date.day))
+      .toSet()
+      .toList()
+    ..sort();
+
+  // Начало последней непрерывной серии отмеченных дней.
+  final last = days.last;
+  var start = last;
+  while (days.contains(start.subtract(const Duration(days: 1)))) {
+    start = start.subtract(const Duration(days: 1));
+  }
+
+  final total = <String, int>{};
+  for (var d = start;
+      !d.isAfter(last);
+      d = d.add(const Duration(days: 1))) {
+    final m = all[d];
+    if (m == null) continue;
+    for (final e in m.entries) {
+      total[e.key] = (total[e.key] ?? 0) + e.value;
+    }
+  }
+  return total;
+});
+
 /// Дата, до которой пользователь отклонил подтверждение предполагаемых дней.
 /// null — не отклонял.
 final assumedDismissedProvider = FutureProvider<DateTime?>((ref) async {

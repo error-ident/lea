@@ -259,6 +259,22 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Весь расход средств гигиены разом: день → {код: количество}.
+  /// Один запрос вместо запроса на каждую строку истории — иначе экран
+  /// статистики дёргал бы БД по разу на цикл.
+  Future<Map<DateTime, Map<String, int>>> hygieneAllByDate() async {
+    final rows = await (select(measurements)
+          ..where((t) => t.typeCode.isIn(const ['pads', 'tampons', 'cup'])))
+        .get();
+    final out = <DateTime, Map<String, int>>{};
+    for (final r in rows) {
+      final d = DateTime(r.date.year, r.date.month, r.date.day);
+      final m = out.putIfAbsent(d, () => <String, int>{});
+      m[r.typeCode] = (m[r.typeCode] ?? 0) + r.value.round();
+    }
+    return out;
+  }
+
   /// Карта «день → код интенсивности» для раскраски календаря градациями.
   /// Дни без заданной интенсивности в карту не попадают (это нормально —
   /// интенсивность необязательна, такие дни красятся базовым цветом).

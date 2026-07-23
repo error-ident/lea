@@ -96,12 +96,29 @@ class AboutScreen extends StatelessWidget {
                   style: LeaType.body.copyWith(color: lea.textSecondary),
                 ),
                 const SizedBox(height: LeaSpace.sm),
-                _Bullet('Длина цикла — медиана последних 6 циклов '
-                    '(работает уже от 3).', lea),
+                _Bullet('Длина цикла — медиана последних 6 циклов. Прогноз '
+                    'работает и с одним циклом, но чем больше истории, тем '
+                    'уже интервал.', lea),
                 _Bullet('Овуляция — не фиксированные «−14», а лютеиновая '
                     'фаза по длине цикла (13–15 дней).', lea),
-                _Bullet('Фертильное окно — асимметричное: 5 дней до овуляции '
-                    'и день овуляции, пик за 2 дня до.', lea),
+                _Bullet('Фертильное окно — 5 дней до овуляции и день овуляции '
+                    '(классическое окно, Mihm 2011). Лея добавляет ещё один '
+                    'день после: момент овуляции мы вычисляем по календарю, '
+                    'а не измеряем, и он может сдвинуться. Этот день — '
+                    'поправка на погрешность оценки, а не расширение '
+                    'фертильного периода.', lea),
+                _Bullet('Прогноз — интервал, а не одна дата. Ширина считается '
+                    'по вашему разбросу длин циклов (устойчивая мера — MAD): '
+                    'ровные циклы дают узкое окно, нерегулярные — широкое. '
+                    'Это не перестраховка: у 46% женщин, считающих свои циклы '
+                    'регулярными, разброс составляет 7 дней и больше '
+                    '(Creinin, 2004).', lea),
+                _Bullet('Пропущенные отметки распознаются: цикл, близкий к '
+                    'удвоенной вашей медиане, считается «склейкой» из-за '
+                    'забытой отметки и не искажает прогноз.', lea),
+                _Bullet('Если цикл вышел за прогнозное окно, Лея честно '
+                    'говорит о задержке, а не продолжает обещать «со дня '
+                    'на день».', lea),
                 const SizedBox(height: LeaSpace.md),
                 Container(
                   padding: const EdgeInsets.all(LeaSpace.md),
@@ -166,9 +183,26 @@ class AboutScreen extends StatelessWidget {
                 ),
                 _Ref(
                   'Li et al. (2021). A predictive, generative model for '
-                  'menstrual cycle lengths (Clue / Columbia).',
+                  'menstrual cycle lengths (Clue / Columbia). Модель учитывает '
+                  'пропущенные отметки — на этой идее основан фильтр «склеек».',
                   'arXiv:2102.12439',
                   'https://arxiv.org/abs/2102.12439',
+                  lea,
+                ),
+                _Ref(
+                  'Creinin, Keverline & Meyn (2004). How regular is regular? '
+                  'An analysis of menstrual cycle regularity. Обоснование '
+                  'того, почему прогноз — интервал, а не одна дата.',
+                  'Contraception · doi:10.1016/j.contraception.2004.04.012',
+                  'https://doi.org/10.1016/j.contraception.2004.04.012',
+                  lea,
+                ),
+                _Ref(
+                  'Mihm, Gangooly & Muttukrishna (2011). The normal menstrual '
+                  'cycle in women. Физиология фаз цикла — основа описаний '
+                  'фаз в приложении.',
+                  'Anim Reprod Sci · doi:10.1016/j.anireprosci.2010.08.030',
+                  'https://doi.org/10.1016/j.anireprosci.2010.08.030',
                   lea,
                 ),
               ],

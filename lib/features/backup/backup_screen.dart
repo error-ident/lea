@@ -31,6 +31,7 @@ class BackupScreen extends ConsumerWidget {
     ref.invalidate(cycleHistoryProvider);
     ref.invalidate(datesWithEntriesProvider);
     ref.invalidate(flowByDateProvider);
+    ref.invalidate(hygieneAllByDateProvider);
     ref.invalidate(visibleCategoriesProvider);
     ref.invalidate(notificationSettingsProvider);
     ref.invalidate(themeIdProvider);
