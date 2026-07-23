@@ -380,6 +380,57 @@ class AppDatabase extends _$AppDatabase {
     return out;
   }
 
+  /// Базальная температура по дням — для подтверждения овуляции.
+  /// Возвращает карту «день → °C» за указанный период.
+  Future<Map<DateTime, double>> bbtByDate(DateTime from, DateTime to) async {
+    final rows = await (select(measurements)
+          ..where((t) => t.typeCode.equals('bbt'))
+          ..where((t) => t.date.isBiggerOrEqualValue(_dayOnly(from)))
+          ..where((t) => t.date.isSmallerOrEqualValue(_dayOnly(to))))
+        .get();
+    return {
+      for (final r in rows)
+        DateTime(r.date.year, r.date.month, r.date.day): r.value,
+    };
+  }
+
+  /// Вся базальная температура (для расчёта личной лютеиновой фазы).
+  Future<Map<DateTime, double>> allBbt() async {
+    final rows = await (select(measurements)
+          ..where((t) => t.typeCode.equals('bbt')))
+        .get();
+    return {
+      for (final r in rows)
+        DateTime(r.date.year, r.date.month, r.date.day): r.value,
+    };
+  }
+
+  /// Даты положительных тестов на овуляцию.
+  ///
+  /// ВАЖНО: фильтруем по КАТЕГОРИИ, а не только по коду опции — код
+  /// 'positive' не уникален, он есть и в других категориях (например,
+  /// тест на беременность). Без фильтра по категории данные бы смешались.
+  Future<List<DateTime>> positiveOvulationTestDates() async {
+    final cat = await (select(trackingCategories)
+          ..where((t) => t.code.equals('ovulation_test')))
+        .getSingleOrNull();
+    if (cat == null) return [];
+
+    final opt = await (select(trackingOptions)
+          ..where((t) =>
+              t.categoryId.equals(cat.id) & t.code.equals('positive')))
+        .getSingleOrNull();
+    if (opt == null) return [];
+
+    final rows = await (select(dayLogs)
+          ..where((t) => t.optionId.equals(opt.id)))
+        .get();
+    return rows
+        .map((r) => DateTime(r.date.year, r.date.month, r.date.day))
+        .toList()
+      ..sort();
+  }
+
   static DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
   /// Карта «день → код интенсивности» для раскраски календаря градациями.

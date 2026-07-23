@@ -98,12 +98,12 @@ class _Empty extends StatelessWidget {
 }
 
 /// Верхние карточки: длина предыдущего цикла, месячных, колебания.
-class _SummaryCards extends StatelessWidget {
+class _SummaryCards extends ConsumerWidget {
   const _SummaryCards({required this.stats});
   final CycleStats stats;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final lea = context.lea;
     // предыдущий завершённый цикл
     final lastCompleted = stats.records.firstWhere(
@@ -150,8 +150,65 @@ class _SummaryCards extends StatelessWidget {
               : null,
           accent: regColor,
         ),
+        const SizedBox(height: LeaSpace.md),
+        // --- Лютеиновая фаза: личная или популяционная оценка ---
+        // Показываем ЧЕСТНО: если подтверждения нет, так и говорим, что
+        // это оценка. Иначе человек решит, что Лея знает больше, чем знает.
+        Builder(builder: (context) {
+          final s = ref.watch(lutealSummaryProvider).valueOrNull;
+          final days = s?.days;
+          final n = s?.confirmedCycles ?? 0;
+          return _StatCard(
+            title: 'Лютеиновая фаза',
+            value: days != null ? '$days дней' : '13–15 дней',
+            valueColor: days != null ? lea.success : null,
+            subtitle: days != null
+                ? 'ваша, подтверждена по ${_cyclesWord(n)} с температурой'
+                : 'общая оценка — ведите базальную температуру, '
+                    'и Лея вычислит вашу',
+            subtitleColor: days != null ? lea.success : lea.textSecondary,
+            accent: days != null ? lea.success : lea.textTertiary,
+          );
+        }),
+        const SizedBox(height: LeaSpace.md),
+        // --- Овуляция в текущем цикле: измерена или рассчитана ---
+        Builder(builder: (context) {
+          final lh = ref.watch(lhOvulationDateProvider).valueOrNull;
+          final luteal = ref.watch(lutealSummaryProvider).valueOrNull?.days;
+          final String value;
+          final String sub;
+          final Color color;
+          if (lh != null) {
+            value = 'Подтверждена';
+            sub = 'по тесту на овуляцию — прогноз опирается на измерение';
+            color = lea.success;
+          } else if (luteal != null) {
+            value = 'Уточнена';
+            sub = 'по вашей длине лютеиновой фазы';
+            color = lea.success;
+          } else {
+            value = 'Расчёт по календарю';
+            sub = 'отмечайте тесты на овуляцию — прогноз станет точнее';
+            color = lea.textTertiary;
+          }
+          return _StatCard(
+            title: 'Овуляция в этом цикле',
+            value: value,
+            valueColor: color,
+            subtitle: sub,
+            subtitleColor:
+                color == lea.success ? lea.success : lea.textSecondary,
+            accent: color,
+          );
+        }),
       ],
     );
+  }
+
+  /// «3 циклам» / «1 циклу» — чтобы подпись читалась естественно.
+  static String _cyclesWord(int n) {
+    if (n % 10 == 1 && n % 100 != 11) return '$n циклу';
+    return '$n циклам';
   }
 }
 

@@ -76,6 +76,8 @@ CyclePrediction predictCycle({
   int? userStatedCycleLength,
   int? userStatedPeriodLength,
   DateTime? today,
+  int? personalLutealDays,
+  DateTime? lhOvulationDate,
 }) {
   final now = DateUtilsLite.dateOnly(today ?? DateTime.now());
 
@@ -146,6 +148,8 @@ CyclePrediction predictCycle({
     confidence: confidence,
     cyclesUsed: recent.length,
     isUncertain: uncertain,
+    personalLutealDays: personalLutealDays,
+    lhOvulationDate: lhOvulationDate,
   );
 }
 
@@ -219,23 +223,54 @@ CyclePrediction _buildPrediction({
   required ConfidenceLevel confidence,
   required int cyclesUsed,
   required bool isUncertain,
+  int? personalLutealDays,
+  DateTime? lhOvulationDate,
 }) {
   final nextStart = lastStart.add(Duration(days: cycleLength));
 
-  // --- Слой 3-preview: лютеиновая фаза динамическая, по длине цикла ---
-  final luteal = lutealForCycle(cycleLength);
-  final ovulationDay = nextStart.subtract(Duration(days: luteal));
+  // --- ИЕРАРХИЯ СЛОЁВ ТОЧНОСТИ ---
+  //
+  // Чем сильнее сигнал, тем он главнее. Измерение всегда перекрывает расчёт:
+  //
+  //   Слой 4 (ЛГ-тест)  — измерено, предсказывает ВПЕРЁД. Максимальный
+  //                       приоритет: положительный тест = пик LH = овуляция
+  //                       через ~сутки.
+  //   Слой 3 (BBT)      — измерено, но ПОСТФАКТУМ. Даёт личную длину
+  //                       лютеиновой фазы для расчёта будущих циклов.
+  //   Слои 0–2 (календарь) — расчёт по медиане, если измерений нет.
+  final hasLh = lhOvulationDate != null;
+  final hasPersonal = personalLutealDays != null;
 
-  final ovulationWindow = DateRange(
-    ovulationDay.subtract(const Duration(days: 1)),
-    ovulationDay.add(const Duration(days: 1)),
-  );
+  final DateTime ovulationDay;
+  if (hasLh) {
+    // ЛГ-тест перекрывает календарную оценку целиком.
+    ovulationDay = DateUtilsLite.dateOnly(lhOvulationDate);
+  } else {
+    final luteal = personalLutealDays ?? lutealForCycle(cycleLength);
+    ovulationDay = nextStart.subtract(Duration(days: luteal));
+  }
+
+  // Окно овуляции сужаем до одного дня, когда есть ИЗМЕРЕННЫЙ сигнал
+  // (ЛГ или подтверждённая температурой лютеиновая фаза). Без измерений
+  // оставляем ±1 день — календарная оценка так точна не бывает.
+  final measured = hasLh || hasPersonal;
+  final ovulationWindow = measured
+      ? DateRange(ovulationDay, ovulationDay)
+      : DateRange(
+          ovulationDay.subtract(const Duration(days: 1)),
+          ovulationDay.add(const Duration(days: 1)),
+        );
+
+  // --- Фертильное окно ---
+  // Добавочный день после овуляции — поправка на погрешность КАЛЕНДАРНОЙ
+  // оценки. Когда овуляция измерена, поправка не нужна: возвращаемся к
+  // классическому окну (Mihm 2011) — 5 дней до овуляции и день овуляции.
+  final afterDays = measured ? 0 : CycleConstants.fertileAfterOvulation;
 
   final fertileWindow = DateRange(
     ovulationDay
         .subtract(const Duration(days: CycleConstants.fertileBeforeOvulation)),
-    ovulationDay
-        .add(const Duration(days: CycleConstants.fertileAfterOvulation)),
+    ovulationDay.add(Duration(days: afterDays)),
   );
 
   return CyclePrediction(

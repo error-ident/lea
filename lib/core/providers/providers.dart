@@ -8,6 +8,8 @@ import '../database/settings_keys.dart';
 import '../prediction/cycle_prediction.dart';
 import '../prediction/predict_cycle.dart';
 import '../prediction/cycle_history.dart';
+import '../prediction/bbt_analysis.dart';
+import '../prediction/lh_analysis.dart';
 import '../notifications/notification_service.dart';
 import '../backup/yandex_auth.dart';
 
@@ -58,10 +60,16 @@ final cycleStartsProvider = FutureProvider<List<DateTime>>((ref) async {
 final predictionProvider = FutureProvider<CyclePrediction>((ref) async {
   final starts = await ref.watch(cycleStartsProvider.future);
   final stated = await ref.watch(statedCycleProvider.future);
+  // Личная лютеиновая фаза, подтверждённая BBT (null — данных мало).
+  final personalLuteal = await ref.watch(personalLutealProvider.future);
+  // Овуляция по ЛГ-тесту в текущем цикле (null — теста нет).
+  final lhDate = await ref.watch(lhOvulationDateProvider.future);
   return predictCycle(
     periodStartDates: starts,
     userStatedCycleLength: stated.cycle,
     userStatedPeriodLength: stated.period,
+    personalLutealDays: personalLuteal,
+    lhOvulationDate: lhDate,
   );
 });
 
@@ -184,6 +192,95 @@ final hygieneProductsProvider = FutureProvider<Set<String>>((ref) async {
   final v = await db.getSetting(SettingsKeys.hygieneProducts);
   if (v == null || v.isEmpty) return {};
   return v.split(',').where((e) => e.isNotEmpty).toSet();
+});
+
+/// Счётчик изменений дневника.
+///
+/// Нужен, чтобы провайдеры, зависящие от отметок (например, овуляция по
+/// ЛГ-тесту), пересчитывались после того, как человек что-то отметил.
+/// Лёгкий: просто число, инкрементируется вручную при записи лога.
+/// Альтернатива — стрим по всей таблице dayLogs — обошлась бы дороже
+/// и дёргала бы UI на каждой мелочи.
+final dayLogsRevisionProvider = StateProvider<int>((ref) => 0);
+
+/// Дата овуляции, определённая по положительному ЛГ-тесту в ТЕКУЩЕМ цикле.
+///
+/// Это единственный сигнал, который предсказывает овуляцию ВПЕРЁД: пик LH
+/// означает овуляцию через ~24–36 часов. BBT (слой 3) подтверждает только
+/// постфактум.
+///
+/// null означает, что в текущем цикле достоверного положительного теста
+/// нет — тогда прогноз остаётся календарным.
+final lhOvulationDateProvider = FutureProvider<DateTime?>((ref) async {
+  final db = ref.watch(databaseProvider);
+  // Реагируем на отметки в дневнике: тест на овуляцию — это обычный лог,
+  // и без этой зависимости прогноз не пересчитался бы после его отметки.
+  ref.watch(dayLogsRevisionProvider);
+  final starts = await ref.watch(cycleStartsProvider.future);
+  if (starts.isEmpty) return null;
+
+  // Начало ТЕКУЩЕГО цикла — последняя отметка начала месячных.
+  final sorted = [...starts]..sort();
+  final cycleStart = DateTime(
+      sorted.last.year, sorted.last.month, sorted.last.day);
+
+  final positives = await db.positiveOvulationTestDates();
+  // Только тесты текущего цикла: прошлые пики к нему не относятся.
+  final inCycle = positives
+      .where((d) => !d.isBefore(cycleStart))
+      .map((d) => d.difference(cycleStart).inDays + 1) // день цикла
+      .toList();
+
+  final ovDay = LhAnalysis.ovulationDayFromPositive(inCycle);
+  if (ovDay == null) return null;
+  return cycleStart.add(Duration(days: ovDay - 1));
+});
+
+/// Сводка по личной лютеиновой фазе: значение + сколько циклов её подтвердили.
+///
+/// Отдельно от personalLutealProvider: движку нужно только число, а
+/// пользователю важен КОНТЕКСТ — на скольких циклах основан вывод.
+/// Число без контекста создаёт ложное доверие.
+typedef LutealSummary = ({int? days, int confirmedCycles});
+
+final lutealSummaryProvider = FutureProvider<LutealSummary>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final history = await ref.watch(cycleHistoryProvider.future);
+  final bbt = await db.allBbt();
+  if (bbt.isEmpty) return (days: null, confirmedCycles: 0);
+
+  final lengths = <int>[];
+  for (final c in history.records) {
+    final cycleLen = c.cycleLength;
+    if (cycleLen == null) continue;
+    final start =
+        DateTime(c.startDate.year, c.startDate.month, c.startDate.day);
+    final byDay = <int, double>{};
+    for (var i = 0; i < cycleLen; i++) {
+      final t = bbt[start.add(Duration(days: i))];
+      if (t != null) byDay[i + 1] = t;
+    }
+    final luteal = BbtAnalysis.lutealLengthForCycle(
+      byDayInCycle: byDay,
+      cycleLength: cycleLen,
+    );
+    if (luteal != null) lengths.add(luteal);
+  }
+
+  return (
+    days: BbtAnalysis.personalLutealLength(lengths),
+    confirmedCycles: lengths.length,
+  );
+});
+
+/// Личная длина лютеиновой фазы для движка — только число.
+///
+/// Берёт готовый расчёт из lutealSummaryProvider, чтобы не проходить по
+/// истории дважды. null = данных мало, движок работает на популяционной
+/// оценке 13–15 дней. Это НЕ ошибка, а честное «пока не знаем».
+final personalLutealProvider = FutureProvider<int?>((ref) async {
+  final s = await ref.watch(lutealSummaryProvider.future);
+  return s.days;
 });
 
 /// Все категории дневника, включая скрытые — для экрана настройки.

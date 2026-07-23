@@ -190,6 +190,10 @@ class _CategoryBlock extends ConsumerWidget {
                             // (точки под датами) — иначе появлялись только после
                             // перезапуска приложения.
                             ref.invalidate(datesWithEntriesProvider);
+                            // Сообщаем зависимым провайдерам, что дневник
+                            // изменился: например, отметка ЛГ-теста должна
+                            // сразу уточнить прогноз овуляции.
+                            ref.read(dayLogsRevisionProvider.notifier).state++;
                             // periodDaysStreamProvider НЕ трогаем — симптомы
                             // не влияют на дни цикла, а его инвалидация
                             // перерисовывает календарь под шторкой (мигание).
