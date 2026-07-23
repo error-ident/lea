@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show ValueNotifier;
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
@@ -69,7 +70,6 @@ class NotificationSettings {
     this.lutealEnabled = false,
     this.follicularText = 'Началась фолликулярная фаза',
     this.lutealText = 'Началась лютеиновая фаза',
-    this.pills = const [],
     this.waters = const [],
   });
 
@@ -94,8 +94,7 @@ class NotificationSettings {
   final String follicularText;
   final String lutealText;
 
-  /// Списки таблеток и воды (каждое — своё время и текст).
-  final List<TimedReminder> pills;
+  /// Напоминания о воде (таблетки переехали в раздел «Лекарства»).
   final List<TimedReminder> waters;
 
   NotificationSettings copyWith({
@@ -111,7 +110,6 @@ class NotificationSettings {
     bool? lutealEnabled,
     String? follicularText,
     String? lutealText,
-    List<TimedReminder>? pills,
     List<TimedReminder>? waters,
   }) =>
       NotificationSettings(
@@ -127,7 +125,6 @@ class NotificationSettings {
         lutealEnabled: lutealEnabled ?? this.lutealEnabled,
         follicularText: follicularText ?? this.follicularText,
         lutealText: lutealText ?? this.lutealText,
-        pills: pills ?? this.pills,
         waters: waters ?? this.waters,
       );
 
@@ -144,7 +141,6 @@ class NotificationSettings {
         'luteal': lutealEnabled,
         'follicularText': follicularText,
         'lutealText': lutealText,
-        'pills': pills.map((e) => e.toJson()).toList(),
         'waters': waters.map((e) => e.toJson()).toList(),
       };
 
@@ -165,9 +161,6 @@ class NotificationSettings {
             'Началась фолликулярная фаза',
         lutealText:
             j['lutealText'] as String? ?? 'Началась лютеиновая фаза',
-        pills: (j['pills'] as List? ?? const [])
-            .map((e) => TimedReminder.fromJson(e as Map<String, dynamic>))
-            .toList(),
         waters: (j['waters'] as List? ?? const [])
             .map((e) => TimedReminder.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -205,7 +198,17 @@ class NotificationService {
     const ios = DarwinInitializationSettings();
     await _plugin.initialize(
       const InitializationSettings(android: android, iOS: ios),
+      onDidReceiveNotificationResponse: _onTap,
     );
+
+    // Приложение могли открыть ТАПОМ по уведомлению, когда оно было закрыто —
+    // тогда onDidReceiveNotificationResponse не сработает, и payload надо
+    // забрать отдельно.
+    final launch = await _plugin.getNotificationAppLaunchDetails();
+    final resp = launch?.notificationResponse;
+    if (launch?.didNotificationLaunchApp == true && resp != null) {
+      _onTap(resp);
+    }
 
     // Явно создаём канал с высокой важностью — иначе уведомления тихие
     // (падают в шторку, но не всплывают баннером и не идут на часы).
@@ -305,17 +308,8 @@ class NotificationService {
         body: s.lutealText,
       );
     }
-    // таблетки — ежедневно в заданное время
-    for (final p in s.pills) {
-      if (p.enabled) {
-        await _scheduleDaily(
-          id: p.id,
-          hour: p.hour,
-          minute: p.minute,
-          body: p.label.isEmpty ? 'Время принять таблетку' : p.label,
-        );
-      }
-    }
+    // Лекарства планируются отдельно — см. scheduleMedications().
+    // Здесь их нет, потому что они живут в БД, а не в настройках уведомлений.
     // вода — ежедневно
     for (final w in s.waters) {
       if (w.enabled) {
@@ -330,6 +324,63 @@ class NotificationService {
   }
 
   /// Разовое уведомление в конкретную дату/время.
+  /// Запланировать напоминания о приёме лекарств.
+  ///
+  /// Отдельно от reschedule(): лекарства живут в БД, а не в настройках
+  /// уведомлений. Вызывать после любого изменения списка препаратов.
+  ///
+  /// id уведомлений начинаются с 1000, чтобы не пересечься с прогнозными
+  /// (1, 2), фазовыми (10, 11) и напоминаниями о воде.
+  Future<void> scheduleMedications(
+    List<({int id, String name, String times, bool remind})> meds,
+  ) async {
+    // Снимаем прошлые напоминания о лекарствах.
+    for (var i = _medIdBase; i < _medIdBase + _medIdRange; i++) {
+      await _plugin.cancel(i);
+    }
+
+    var slot = 0;
+    for (final m in meds) {
+      if (!m.remind) continue;
+      for (final t in m.times.split(',')) {
+        final parts = t.trim().split(':');
+        if (parts.length != 2) continue;
+        final h = int.tryParse(parts[0]);
+        final min = int.tryParse(parts[1]);
+        if (h == null || min == null) continue;
+        if (slot >= _medIdRange) return; // защита от переполнения диапазона
+        await _scheduleDaily(
+          id: _medIdBase + slot,
+          hour: h,
+          minute: min,
+          body: m.name.isEmpty ? 'Время принять лекарство' : m.name,
+          // По тапу откроем дневник сегодняшнего дня, где можно отметить приём.
+          payload: 'med:${m.id}',
+        );
+        slot++;
+      }
+    }
+  }
+
+  static const int _medIdBase = 1000;
+  static const int _medIdRange = 200;
+
+  /// Payload уведомления, по которому открыли приложение.
+  ///
+  /// Полноценная кнопка «Принял» прямо в шторке потребовала бы записи в БД
+  /// из фонового изолята. У нас БД зашифрована ключом из Keystore, а он
+  /// может быть недоступен при заблокированном экране; плюс SQLCipher в двух
+  /// изолятах одновременно рискует повреждением данных. Поэтому уведомление
+  /// не пишет в БД само, а ОТКРЫВАЕТ приложение на нужном дне — один тап
+  /// вместо трёх, и никакого риска для данных.
+  static final ValueNotifier<String?> lastPayload =
+      ValueNotifier<String?>(null);
+
+  static void _onTap(NotificationResponse r) {
+    final p = r.payload;
+    if (p != null && p.isNotEmpty) lastPayload.value = p;
+  }
+
   /// Можно ли планировать ТОЧНЫЕ будильники (Android 12+ может запретить).
   /// Кэшируется, чтобы не дёргать платформу на каждое уведомление.
   bool? _exactAllowed;
@@ -390,6 +441,7 @@ class NotificationService {
     required int hour,
     required int minute,
     required String body,
+    String? payload,
   }) async {
     final now = tz.TZDateTime.now(tz.local);
     var when =
@@ -407,6 +459,7 @@ class NotificationService {
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: DateTimeComponents.time, // повтор каждый день
+      payload: payload,
     );
   }
 

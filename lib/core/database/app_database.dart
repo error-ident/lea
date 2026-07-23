@@ -23,19 +23,29 @@ part 'app_database.g.dart';
     DayNotes,
     Measurements,
     SettingsKv,
+    Medications,
+    MedicationIntakes,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
           await _seed();
+        },
+        onUpgrade: (m, from, to) async {
+          // v1 → v2: раздел «Лекарства» (препараты + история приёмов).
+          // Существующие данные не трогаем — только добавляем таблицы.
+          if (from < 2) {
+            await m.createTable(medications);
+            await m.createTable(medicationIntakes);
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -108,6 +118,11 @@ class AppDatabase extends _$AppDatabase {
     }
     for (final m in meas) {
       set.add(DateTime(m.date.year, m.date.month, m.date.day));
+    }
+    // Отметка приёма лекарства — тоже запись за день.
+    final intakes = await select(medicationIntakes).get();
+    for (final i in intakes) {
+      set.add(DateTime(i.date.year, i.date.month, i.date.day));
     }
     return set;
   }
@@ -275,6 +290,98 @@ class AppDatabase extends _$AppDatabase {
     return out;
   }
 
+  // ---- Лекарства ----
+
+  /// Активные препараты: не архивные и курс ещё не закончился.
+  Future<List<Medication>> activeMedications([DateTime? on]) async {
+    final day = _dayOnly(on ?? DateTime.now());
+    final all = await (select(medications)
+          ..where((t) => t.archived.equals(false))
+          ..orderBy([(t) => OrderingTerm(expression: t.name)]))
+        .get();
+    return all.where((m) {
+      final start = _dayOnly(m.startDate);
+      if (day.isBefore(start)) return false;
+      final end = m.endDate;
+      if (end != null && day.isAfter(_dayOnly(end))) return false;
+      return true;
+    }).toList();
+  }
+
+  /// Все препараты, включая архивные (для экрана управления).
+  Future<List<Medication>> allMedications() =>
+      (select(medications)..orderBy([
+            (t) => OrderingTerm(expression: t.archived),
+            (t) => OrderingTerm(expression: t.name),
+          ]))
+          .get();
+
+  Future<int> insertMedication(MedicationsCompanion m) =>
+      into(medications).insert(m);
+
+  Future<void> updateMedication(Medication m) =>
+      update(medications).replace(m);
+
+  /// Удаление вместе с историей приёмов (каскад по внешнему ключу).
+  Future<void> deleteMedication(int id) =>
+      (delete(medications)..where((t) => t.id.equals(id))).go();
+
+  /// Отметки приёма за день: id лекарства → множество отмеченных времён.
+  Future<Map<int, Set<String>>> intakesForDay(DateTime date) async {
+    final day = _dayOnly(date);
+    final rows = await (select(medicationIntakes)
+          ..where((t) => t.date.equals(day)))
+        .get();
+    final out = <int, Set<String>>{};
+    for (final r in rows) {
+      out.putIfAbsent(r.medicationId, () => <String>{}).add(r.slot);
+    }
+    return out;
+  }
+
+  /// Отметить/снять приём. Повторный вызов снимает отметку — человек
+  /// мог нажать по ошибке, и это должно легко откатываться.
+  Future<void> toggleIntake(int medicationId, DateTime date, String slot) async {
+    final day = _dayOnly(date);
+    final existing = await (select(medicationIntakes)
+          ..where((t) => t.medicationId.equals(medicationId))
+          ..where((t) => t.date.equals(day))
+          ..where((t) => t.slot.equals(slot)))
+        .getSingleOrNull();
+    if (existing != null) {
+      await (delete(medicationIntakes)..where((t) => t.id.equals(existing.id)))
+          .go();
+      return;
+    }
+    await into(medicationIntakes).insert(
+      MedicationIntakesCompanion.insert(
+        medicationId: medicationId,
+        date: day,
+        slot: slot,
+      ),
+    );
+  }
+
+  /// История приёмов препарата за период — для карточки лекарства.
+  Future<Map<DateTime, Set<String>>> intakeHistory(
+    int medicationId,
+    DateTime from,
+    DateTime to,
+  ) async {
+    final rows = await (select(medicationIntakes)
+          ..where((t) => t.medicationId.equals(medicationId))
+          ..where((t) => t.date.isBiggerOrEqualValue(_dayOnly(from)))
+          ..where((t) => t.date.isSmallerOrEqualValue(_dayOnly(to))))
+        .get();
+    final out = <DateTime, Set<String>>{};
+    for (final r in rows) {
+      out.putIfAbsent(r.date, () => <String>{}).add(r.slot);
+    }
+    return out;
+  }
+
+  static DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
   /// Карта «день → код интенсивности» для раскраски календаря градациями.
   /// Дни без заданной интенсивности в карту не попадают (это нормально —
   /// интенсивность необязательна, такие дни красятся базовым цветом).
@@ -305,6 +412,36 @@ class AppDatabase extends _$AppDatabase {
       ..where((t) => t.isHidden.equals(false))
       ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)]);
     return q.get();
+  }
+
+  /// Все категории, включая скрытые — для экрана настройки дневника.
+  Future<List<TrackingCategory>> allCategories() {
+    final q = select(trackingCategories)
+      ..orderBy([(t) => OrderingTerm.asc(t.sortOrder)]);
+    return q.get();
+  }
+
+  /// Показать/скрыть категорию.
+  ///
+  /// ВАЖНО: скрытие НЕ удаляет данные. Всё, что отмечено в этой категории,
+  /// остаётся в БД и вернётся, если категорию снова включить. Скрытие —
+  /// про интерфейс, а не про удаление.
+  Future<void> setCategoryHidden(int id, bool hidden) async {
+    await (update(trackingCategories)..where((t) => t.id.equals(id)))
+        .write(TrackingCategoriesCompanion(isHidden: Value(hidden)));
+  }
+
+  /// Сохранить новый порядок категорий (список id в нужной последовательности).
+  Future<void> reorderCategories(List<int> orderedIds) async {
+    await batch((b) {
+      for (var i = 0; i < orderedIds.length; i++) {
+        b.update(
+          trackingCategories,
+          TrackingCategoriesCompanion(sortOrder: Value(i)),
+          where: (t) => t.id.equals(orderedIds[i]),
+        );
+      }
+    });
   }
 
   Future<List<TrackingOption>> optionsForCategory(int categoryId) {
@@ -392,6 +529,28 @@ class AppDatabase extends _$AppDatabase {
         ),
       );
     }
+  }
+
+  /// Задать силу уже отмеченной опции, НЕ снимая отметку.
+  ///
+  /// Отдельно от toggleLog: там повторный вызов снимает отметку, а здесь
+  /// нужно менять силу у существующей записи. Передача null сбрасывает
+  /// силу — она необязательна, человек может просто отметить симптом,
+  /// не оценивая его.
+  Future<void> setLogIntensity(
+      DateTime date, int optionId, int? intensity) async {
+    final day = DateTime(date.year, date.month, date.day);
+    await (update(dayLogs)
+          ..where((t) => t.date.equals(day) & t.optionId.equals(optionId)))
+        .write(DayLogsCompanion(intensity: Value(intensity)));
+  }
+
+  /// Силы отмеченных опций за день: optionId → уровень (1–3) или null.
+  Future<Map<int, int?>> logIntensitiesForDay(DateTime date) async {
+    final day = DateTime(date.year, date.month, date.day);
+    final rows =
+        await (select(dayLogs)..where((t) => t.date.equals(day))).get();
+    return {for (final r in rows) r.optionId: r.intensity};
   }
 
   // ---- Заметки ----

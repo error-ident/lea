@@ -162,15 +162,9 @@ class _BodyState extends ConsumerState<_Body> {
           onChanged: (h, m) => _save(s.copyWith(hour: h, minute: m)),
         ),
         const SizedBox(height: LeaSpace.xxl),
-        // ---- Таблетки ----
-        _ListSection(
-          title: 'Таблетки',
-          addLabel: 'Добавить таблетку',
-          items: s.pills,
-          defaultLabel: '',
-          onChanged: (list) => _save(s.copyWith(pills: list)),
-        ),
-        const SizedBox(height: LeaSpace.xxl),
+        // Таблетки переехали в отдельный раздел «Лекарства»: там у препарата
+        // есть название, дозировка, несколько приёмов в день, курс и история
+        // приёмов — это уже не просто будильник.
         // ---- Вода ----
         _ListSection(
           title: 'Вода',

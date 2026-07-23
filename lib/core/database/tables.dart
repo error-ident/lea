@@ -117,3 +117,62 @@ class SettingsKv extends Table {
   @override
   Set<Column> get primaryKey => {key};
 }
+
+/// Лекарство/препарат, который человек принимает.
+///
+/// Отдельная сущность, а не просто напоминание: у лекарства есть название,
+/// расписание (может быть несколько приёмов в день), период курса и
+/// история приёмов. Это нужно, чтобы видеть соблюдение курса и связывать
+/// приём с симптомами (например: начала пить железо → ушла ли усталость).
+class Medications extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  /// Название препарата, как его называет человек.
+  TextColumn get name => text()();
+
+  /// Дозировка — свободный текст («1 таблетка», «25 мг»). Необязательно.
+  TextColumn get dosage => text().withDefault(const Constant(''))();
+
+  /// Времена приёма через запятую в формате HH:mm — «09:00,21:00».
+  /// Строкой, а не отдельной таблицей: приёмов в день редко больше 4,
+  /// а так проще читать и редактировать.
+  TextColumn get times => text().withDefault(const Constant(''))();
+
+  /// Слать ли напоминания в эти времена.
+  BoolColumn get remind => boolean().withDefault(const Constant(true))();
+
+  /// Начало приёма. Конец — null, если принимается постоянно.
+  DateTimeColumn get startDate => dateTime()();
+  DateTimeColumn get endDate => dateTime().nullable()();
+
+  /// Курс завершён вручную — не показываем в активных, но историю храним.
+  BoolColumn get archived => boolean().withDefault(const Constant(false))();
+
+  DateTimeColumn get createdAt =>
+      dateTime().withDefault(currentDateAndTime)();
+}
+
+/// Факт приёма лекарства в конкретный день и время.
+///
+/// Запись есть = принято. Записи нет = не отмечено (это НЕ то же самое,
+/// что «пропущено»: человек мог просто не отметить). Мы не додумываем
+/// за пользователя и не укоряем — просто показываем, что отмечено.
+class MedicationIntakes extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get medicationId =>
+      integer().references(Medications, #id, onDelete: KeyAction.cascade)();
+
+  /// День приёма (без времени).
+  DateTimeColumn get date => dateTime()();
+
+  /// Какое именно время из расписания отмечено — «09:00».
+  /// Позволяет различать утренний и вечерний приём одного лекарства.
+  TextColumn get slot => text()();
+
+  DateTimeColumn get takenAt =>
+      dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<String> get customConstraints =>
+      ['UNIQUE (medication_id, date, slot)'];
+}

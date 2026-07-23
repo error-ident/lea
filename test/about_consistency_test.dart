@@ -145,9 +145,9 @@ void main() {
       );
       final ov = p.ovulationWindow.start.add(const Duration(days: 1));
       final expectedStart = ov.subtract(
-          Duration(days: CycleConstants.fertileBeforeOvulation));
+          const Duration(days: CycleConstants.fertileBeforeOvulation));
       final expectedEnd =
-          ov.add(Duration(days: CycleConstants.fertileAfterOvulation));
+          ov.add(const Duration(days: CycleConstants.fertileAfterOvulation));
 
       expect(p.fertileWindow.start, expectedStart,
           reason: 'Начало фертильного окна не совпадает с '

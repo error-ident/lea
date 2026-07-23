@@ -6,6 +6,7 @@ import '../../core/database/app_database.dart';
 import '../../core/database/settings_keys.dart';
 import '../../core/prediction/cycle_prediction.dart';
 import '../../core/prediction/predict_cycle.dart';
+import '../../core/notifications/notification_service.dart';
 import '../../core/providers/providers.dart';
 import '../../l10n/strings.dart';
 import 'day_phase.dart';
@@ -24,6 +25,44 @@ class CalendarScreen extends ConsumerStatefulWidget {
 
 class _CalendarScreenState extends ConsumerState<CalendarScreen> {
   DateTime? _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    // Открыли приложение тапом по напоминанию о лекарстве — сразу показываем
+    // дневник сегодняшнего дня, где можно отметить приём.
+    NotificationService.lastPayload.addListener(_onNotificationPayload);
+    // Payload мог прийти ДО подписки (приложение стартовало из уведомления).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (NotificationService.lastPayload.value != null) {
+        _onNotificationPayload();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    NotificationService.lastPayload.removeListener(_onNotificationPayload);
+    super.dispose();
+  }
+
+  void _onNotificationPayload() {
+    final p = NotificationService.lastPayload.value;
+    if (p == null || !p.startsWith('med:')) return;
+    NotificationService.lastPayload.value = null; // разово
+    if (!mounted) return;
+    final today = DateTime.now();
+    final day = DateTime(today.year, today.month, today.day);
+    final isPeriod = ref
+            .read(periodDaysStreamProvider)
+            .valueOrNull
+            ?.any((r) =>
+                r.date.year == day.year &&
+                r.date.month == day.month &&
+                r.date.day == day.day) ??
+        false;
+    _onSelectDay(day, isPeriod);
+  }
 
   /// Последний успешный прогноз. Нужен, чтобы календарь НЕ исчезал во время
   /// пересчёта.
@@ -524,6 +563,58 @@ class _DayActionsState extends ConsumerState<_DayActions> {
               ),
               const SizedBox(height: LeaSpace.sm),
             ],
+            // ---- Лекарства на этот день ----
+            // Отметка приёма прямо в дневнике: если для этого надо было бы
+            // заходить в отдельный раздел, никто бы не отмечал.
+            Builder(builder: (context) {
+              final meds =
+                  ref.watch(activeMedicationsProvider).valueOrNull ?? const [];
+              final onDate = meds.where((m) {
+                final d = DateTime(widget.date.year, widget.date.month,
+                    widget.date.day);
+                final s = DateTime(m.startDate.year, m.startDate.month,
+                    m.startDate.day);
+                if (d.isBefore(s)) return false;
+                final e = m.endDate;
+                if (e != null &&
+                    d.isAfter(DateTime(e.year, e.month, e.day))) {
+                  return false;
+                }
+                return true;
+              }).toList();
+              if (onDate.isEmpty) return const SizedBox.shrink();
+
+              final taken =
+                  ref.watch(intakesForDayProvider(widget.date)).valueOrNull ??
+                      const <int, Set<String>>{};
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: LeaSpace.xs),
+                  Text('Лекарства',
+                      style:
+                          LeaType.caption.copyWith(color: lea.textTertiary)),
+                  const SizedBox(height: LeaSpace.sm),
+                  for (final m in onDate)
+                    _MedIntakeRow(
+                      name: m.name,
+                      times: m.times
+                          .split(',')
+                          .where((e) => e.isNotEmpty)
+                          .toList(),
+                      taken: taken[m.id] ?? const <String>{},
+                      onToggle: (slot) async {
+                        final db = ref.read(databaseProvider);
+                        await db.toggleIntake(m.id, widget.date, slot);
+                        ref.invalidate(intakesForDayProvider(widget.date));
+                        ref.invalidate(datesWithEntriesProvider);
+                      },
+                    ),
+                  const SizedBox(height: LeaSpace.sm),
+                ],
+              );
+            }),
             // ---- Счётчики средств гигиены (только выбранные в настройках) ----
             Builder(builder: (context) {
               final products =
@@ -1110,6 +1201,116 @@ class _RoundBtn extends StatelessWidget {
             icon,
             size: LeaIconSize.sm,
             color: enabled ? lea.accent : lea.textTertiary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Строка приёма лекарства в дневнике дня.
+///
+/// Одно время — просто галочка. Несколько — чипы с временами, каждый
+/// отмечается отдельно (утро и вечер это разные приёмы).
+///
+/// Тон: неотмеченный приём — это НЕ «пропущен», человек мог просто не
+/// нажать. Поэтому никаких красных предупреждений и укоров.
+class _MedIntakeRow extends StatelessWidget {
+  const _MedIntakeRow({
+    required this.name,
+    required this.times,
+    required this.taken,
+    required this.onToggle,
+  });
+
+  final String name;
+  final List<String> times;
+  final Set<String> taken;
+  final Future<void> Function(String slot) onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    // Препарат без расписания — одна отметка «принял» на день.
+    final slots = times.isEmpty ? const ['—'] : times;
+    final allTaken = slots.every(taken.contains);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: LeaSpace.sm),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: LeaType.label.copyWith(
+                color: allTaken ? lea.textTertiary : lea.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(width: LeaSpace.sm),
+          Wrap(
+            spacing: LeaSpace.xs,
+            children: [
+              for (final s in slots)
+                _SlotChip(
+                  label: s,
+                  done: taken.contains(s),
+                  onTap: () => onToggle(s),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SlotChip extends StatelessWidget {
+  const _SlotChip({
+    required this.label,
+    required this.done,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool done;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    return Material(
+      color: done ? lea.accent : lea.accentSoft,
+      borderRadius: LeaRadius.buttonBR,
+      child: InkWell(
+        borderRadius: LeaRadius.buttonBR,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: LeaSpace.sm,
+            vertical: 6,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                done ? Icons.check : Icons.circle_outlined,
+                size: 14,
+                color: done ? lea.textOnAccent : lea.accent,
+              ),
+              if (label != '—') ...[
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: LeaType.caption.copyWith(
+                    color: done ? lea.textOnAccent : lea.textPrimary,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ),

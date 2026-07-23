@@ -35,7 +35,7 @@ class BackupService {
   final AppDatabase db;
 
   static const _magic = 'LEA-BACKUP-1';
-  static const _dataVersion = 2;
+  static const _dataVersion = 3;
 
   /// Собрать снимок всех данных в JSON-строку.
   Future<String> _exportJson() async {
@@ -44,6 +44,9 @@ class BackupService {
     final notes = await db.select(db.dayNotes).get();
     final meas = await db.select(db.measurements).get();
     final settings = await db.select(db.settingsKv).get();
+    final meds = await db.select(db.medications).get();
+    final intakes = await db.select(db.medicationIntakes).get();
+    final medIdToName = {for (final m in meds) m.id: m.name};
 
     // Карта id опции → составной ключ 'catCode:optCode' (для flowOptionId и логов).
     final opts = await db.select(db.trackingOptions).get();
@@ -83,6 +86,31 @@ class BackupService {
           .toList(),
       'settings':
           settings.map((e) => {'key': e.key, 'value': e.value}).toList(),
+      // Лекарства и история приёмов. Даты — календарными строками,
+      // как и всё остальное (иначе съедут между часовыми поясами).
+      'medications': meds
+          .map((e) => {
+                'name': e.name,
+                'dosage': e.dosage,
+                'times': e.times,
+                'remind': e.remind,
+                'startDate': BackupDateCodec.encode(e.startDate),
+                'endDate': e.endDate == null
+                    ? null
+                    : BackupDateCodec.encode(e.endDate!),
+                'archived': e.archived,
+              })
+          .toList(),
+      // Приёмы привязываем к названию препарата, а не к id: на новом
+      // устройстве id будут другими.
+      'intakes': intakes
+          .map((e) => {
+                'med': medIdToName[e.medicationId],
+                'date': BackupDateCodec.encode(e.date),
+                'slot': e.slot,
+              })
+          .where((e) => e['med'] != null)
+          .toList(),
     };
     return jsonEncode(data);
   }
@@ -181,6 +209,9 @@ class BackupService {
       await db.delete(db.dayNotes).go();
       await db.delete(db.measurements).go();
       await db.delete(db.periodDays).go();
+      // Лекарства: удаляем вместе с историей (каскад), потом вставляем заново.
+      await db.delete(db.medicationIntakes).go();
+      await db.delete(db.medications).go();
 
       for (final r in (data['periodDays'] as List? ?? const [])) {
         final m = r as Map<String, dynamic>;
@@ -255,6 +286,42 @@ class BackupService {
                 key: _str(m['key']),
                 value: _str(m['value']),
               ),
+            );
+      }
+
+      // --- Лекарства и история приёмов (формат v3) ---
+      // Приёмы привязаны к НАЗВАНИЮ препарата: id на новом устройстве другие.
+      final nameToId = <String, int>{};
+      for (final r in (data['medications'] as List? ?? const [])) {
+        final m = r as Map<String, dynamic>;
+        final name = _str(m['name']);
+        if (name.isEmpty) continue;
+        final id = await db.into(db.medications).insert(
+              MedicationsCompanion.insert(
+                name: name,
+                dosage: Value(_str(m['dosage'])),
+                times: Value(_str(m['times'])),
+                remind: Value(m['remind'] != false),
+                startDate: BackupDateCodec.decode(m['startDate']),
+                endDate: Value(m['endDate'] == null
+                    ? null
+                    : BackupDateCodec.decode(m['endDate'])),
+                archived: Value(m['archived'] == true),
+              ),
+            );
+        nameToId[name] = id;
+      }
+      for (final r in (data['intakes'] as List? ?? const [])) {
+        final m = r as Map<String, dynamic>;
+        final medId = nameToId[_str(m['med'])];
+        if (medId == null) continue;
+        await db.into(db.medicationIntakes).insert(
+              MedicationIntakesCompanion.insert(
+                medicationId: medId,
+                date: BackupDateCodec.decode(m['date']),
+                slot: _str(m['slot']),
+              ),
+              mode: InsertMode.insertOrIgnore,
             );
       }
     });

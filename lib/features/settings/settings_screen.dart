@@ -9,6 +9,8 @@ import '../../core/icon/app_icon_service.dart';
 import '../splash/lea_mark.dart';
 import '../backup/backup_screen.dart';
 import '../about/about_screen.dart';
+import '../medications/medications_screen.dart';
+import 'diary_setup_screen.dart';
 import '../about/support_screen.dart';
 import '../lock/set_pin_screen.dart';
 import '../notifications/notifications_screen.dart';
@@ -71,6 +73,30 @@ class SettingsScreen extends ConsumerWidget {
             trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const AppearanceScreen()),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.tune, color: lea.accent),
+            title: Text('Дневник',
+                style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
+            subtitle: Text('какие разделы показывать и в каком порядке',
+                style: LeaType.caption.copyWith(color: lea.textSecondary)),
+            trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const DiarySetupScreen()),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.medication_outlined, color: lea.accent),
+            title: Text('Лекарства',
+                style: LeaType.subtitle.copyWith(color: lea.textPrimary)),
+            subtitle: Text('Препараты, расписание, история приёма',
+                style: LeaType.caption.copyWith(color: lea.textSecondary)),
+            trailing: Icon(Icons.chevron_right, color: lea.textTertiary),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const MedicationsScreen()),
             ),
           ),
           ListTile(

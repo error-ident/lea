@@ -186,6 +186,40 @@ final hygieneProductsProvider = FutureProvider<Set<String>>((ref) async {
   return v.split(',').where((e) => e.isNotEmpty).toSet();
 });
 
+/// Все категории дневника, включая скрытые — для экрана настройки.
+final allCategoriesProvider =
+    FutureProvider<List<TrackingCategory>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  return db.allCategories();
+});
+
+/// Силы отмеченных опций за день: optionId → уровень (1–3) или null.
+final logIntensitiesProvider =
+    FutureProvider.family<Map<int, int?>, DateTime>((ref, date) async {
+  final db = ref.watch(databaseProvider);
+  return db.logIntensitiesForDay(date);
+});
+
+/// Все препараты, включая завершённые (для экрана управления).
+final allMedicationsProvider = FutureProvider<List<Medication>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  return db.allMedications();
+});
+
+/// Активные препараты на сегодня — те, что нужно принимать.
+final activeMedicationsProvider =
+    FutureProvider<List<Medication>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  return db.activeMedications();
+});
+
+/// Отметки приёма за конкретный день: id препарата → отмеченные времена.
+final intakesForDayProvider =
+    FutureProvider.family<Map<int, Set<String>>, DateTime>((ref, date) async {
+  final db = ref.watch(databaseProvider);
+  return db.intakesForDay(date);
+});
+
 /// Весь расход средств гигиены по дням — грузится ОДНИМ запросом.
 /// Экран статистики берёт данные отсюда и суммирует по диапазонам локально,
 /// вместо запроса к БД на каждую строку истории.

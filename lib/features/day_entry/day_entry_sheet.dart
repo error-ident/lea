@@ -116,6 +116,9 @@ class _CategoryBlock extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final lea = context.lea;
+    // Силы отмеченных опций — нужны, чтобы карточка показала свою шкалу.
+    final intensities =
+        ref.watch(logIntensitiesProvider(date)).valueOrNull ?? const {};
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: LeaSpace.md),
@@ -125,6 +128,18 @@ class _CategoryBlock extends ConsumerWidget {
           Text(L.t(category.titleKey).toUpperCase(),
               style: LeaType.sectionLabel
                   .copyWith(color: lea.textTertiary)),
+          // Подсказка про долгий тап — иначе о шкале силы никто не узнает.
+          // Показываем только там, где шкала есть, и только если в этой
+          // категории уже что-то отмечено (до отметки шкала недоступна).
+          if (kIntensityCategories.contains(category.code) &&
+              options.any((o) => selectedIds.contains(o.id)))
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                'удерживайте отмеченное, чтобы указать силу',
+                style: LeaType.caption.copyWith(color: lea.textTertiary),
+              ),
+            ),
           const SizedBox(height: LeaSpace.md),
           if (category.type == TrackingType.numeric)
             _NumericInput(category: category, date: date)
@@ -147,6 +162,18 @@ class _CategoryBlock extends ConsumerWidget {
                           label: L.t(opt.titleKey),
                           iconRef: opt.iconRef,
                           selected: selectedIds.contains(opt.id),
+                          // Шкала силы — прямо НА карточке, а не отдельной
+                          // строкой снизу: иначе при выборе верхнего симптома
+                          // шкала появлялась за пределами экрана, и человек
+                          // её просто не видел.
+                          showIntensity:
+                              kIntensityCategories.contains(category.code),
+                          intensity: intensities[opt.id],
+                          onIntensity: (level) async {
+                            final db = ref.read(databaseProvider);
+                            await db.setLogIntensity(date, opt.id, level);
+                            ref.invalidate(logIntensitiesProvider(date));
+                          },
                           onTap: () async {
                             final db = ref.read(databaseProvider);
                             if (category.type == TrackingType.singleChoice) {
@@ -185,11 +212,23 @@ class _OptionCard extends StatefulWidget {
     required this.selected,
     required this.onTap,
     this.iconRef,
+    this.showIntensity = false,
+    this.intensity,
+    this.onIntensity,
   });
   final String label;
   final bool selected;
   final VoidCallback onTap;
   final String? iconRef;
+
+  /// Показывать ли шкалу силы (только для категорий, где она осмысленна).
+  final bool showIntensity;
+
+  /// Текущий уровень 1–3 или null (сила необязательна).
+  final int? intensity;
+
+  /// Смена уровня. null сбрасывает силу.
+  final ValueChanged<int?>? onIntensity;
 
   @override
   State<_OptionCard> createState() => _OptionCardState();
@@ -211,6 +250,61 @@ class _OptionCardState extends State<_OptionCard>
     super.dispose();
   }
 
+  /// Показывать полоски силы: только у ВЫБРАННОЙ карточки в категории,
+  /// где шкала осмысленна. У невыбранных ничего не рисуем — иначе сетка
+  /// пестрит и непонятно, что уже отмечено.
+  bool get _showBars => widget.selected && widget.showIntensity;
+
+  /// Выбор силы во всплывающей шторке.
+  ///
+  /// ПОЧЕМУ ШТОРКА, А НЕ ТАП ПО ПОЛОСКАМ: полоски на карточке получались
+  /// 12×4px — попасть пальцем трудно. Здесь кнопки нормального размера.
+  /// Полоски остались как ИНДИКАТОР: видно, задана сила и какая.
+  Future<void> _pickIntensity() async {
+    final lea = context.lea;
+    final picked = await showModalBottomSheet<int?>(
+      context: context,
+      backgroundColor: lea.surface,
+      shape: RoundedRectangleBorder(borderRadius: LeaRadius.sheetTopBR),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(LeaSpace.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.label,
+                  style: LeaType.h2.copyWith(color: lea.textPrimary)),
+              const SizedBox(height: LeaSpace.xs),
+              Text('Насколько выражено — если хотите отметить',
+                  style: LeaType.label.copyWith(color: lea.textSecondary)),
+              const SizedBox(height: LeaSpace.lg),
+              for (final e in const {1: 'Слабо', 2: 'Средне', 3: 'Сильно'}
+                  .entries)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: LeaSpace.sm),
+                  child: _LevelButton(
+                    label: e.value,
+                    level: e.key,
+                    selected: widget.intensity == e.key,
+                    onTap: () => Navigator.of(ctx).pop(e.key),
+                  ),
+                ),
+              if (widget.intensity != null)
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(-1), // сброс
+                  child: Text('Убрать оценку',
+                      style: LeaType.label.copyWith(color: lea.textSecondary)),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked == null) return; // закрыл свайпом — ничего не меняем
+    widget.onIntensity?.call(picked == -1 ? null : picked);
+  }
+
   @override
   Widget build(BuildContext context) {
     final lea = context.lea;
@@ -228,6 +322,10 @@ class _OptionCardState extends State<_OptionCard>
           });
           widget.onTap();
         },
+        // Долгий тап — выбор силы. Обычный тап занят отметкой симптома,
+        // поэтому шкала живёт на длинном нажатии. Полоски внизу карточки
+        // показывают текущий уровень и намекают, что здесь что-то есть.
+        onLongPress: _showBars ? _pickIntensity : null,
         child: Container(
           height: 104,
           padding: const EdgeInsets.symmetric(
@@ -264,7 +362,9 @@ class _OptionCardState extends State<_OptionCard>
               Text(
                 widget.label,
                 textAlign: TextAlign.center,
-                maxLines: 2,
+                // Когда показываем шкалу — текст в одну строку, чтобы
+                // высота карточки НЕ менялась и сетка не прыгала.
+                maxLines: _showBars ? 1 : 2,
                 overflow: TextOverflow.ellipsis,
                 style: LeaType.caption.copyWith(
                   color: widget.selected ? lea.accent : lea.textSecondary,
@@ -272,6 +372,10 @@ class _OptionCardState extends State<_OptionCard>
                   height: 1.1,
                 ),
               ),
+              if (_showBars) ...[
+                const SizedBox(height: 4),
+                _IntensityBars(level: widget.intensity),
+              ],
             ],
           ),
         ),
@@ -427,6 +531,116 @@ class _NoteFieldState extends ConsumerState<_NoteField> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Категории, где шкала силы осмысленна.
+///
+/// НЕ для всех: «секс был» или «тест положительный» не имеют градаций,
+/// а у выделений своя шкала. Навязывать силу везде — замедлить ввод и
+/// получить бессмысленные записи вроде «секс: слабо».
+const kIntensityCategories = {
+  'symptoms',
+  'digestion',
+  'mood',
+  'cravings',
+};
+
+/// Индикатор силы на карточке: три полоски, заполненные до уровня.
+///
+/// НЕ кнопка — просто показывает, задана ли сила и какая. Выбор происходит
+/// долгим тапом по карточке (полоски 12×4px слишком мелкие, чтобы в них
+/// попадать пальцем). Раз это индикатор, а не элемент управления, полоски
+/// можно сделать чуть крупнее и заметнее.
+class _IntensityBars extends StatelessWidget {
+  const _IntensityBars({required this.level});
+
+  final int? level;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        for (var i = 1; i <= 3; i++)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Container(
+              width: 14,
+              height: 5,
+              decoration: BoxDecoration(
+                color: (level ?? 0) >= i
+                    ? lea.accent
+                    : lea.accent.withValues(alpha: 0.22),
+                borderRadius: BorderRadius.circular(2.5),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Крупная кнопка уровня во всплывающей шторке.
+class _LevelButton extends StatelessWidget {
+  const _LevelButton({
+    required this.label,
+    required this.level,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final int level;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final lea = context.lea;
+    return Material(
+      color: selected ? lea.accent : lea.accentSoft,
+      borderRadius: LeaRadius.buttonBR,
+      child: InkWell(
+        borderRadius: LeaRadius.buttonBR,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: LeaSpace.lg,
+            vertical: LeaSpace.md,
+          ),
+          child: Row(
+            children: [
+              // Мини-индикатор: сколько полосок соответствует уровню.
+              for (var i = 1; i <= 3; i++)
+                Padding(
+                  padding: const EdgeInsets.only(right: 3),
+                  child: Container(
+                    width: 12,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: i <= level
+                          ? (selected ? lea.textOnAccent : lea.accent)
+                          : (selected
+                              ? lea.textOnAccent.withValues(alpha: 0.35)
+                              : lea.accent.withValues(alpha: 0.25)),
+                      borderRadius: BorderRadius.circular(2.5),
+                    ),
+                  ),
+                ),
+              const SizedBox(width: LeaSpace.md),
+              Text(
+                label,
+                style: LeaType.subtitle.copyWith(
+                  color: selected ? lea.textOnAccent : lea.textPrimary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
